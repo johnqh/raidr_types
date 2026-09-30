@@ -10,6 +10,10 @@ import type { McpManifest, McpSource } from './mcp.js';
 // Entity rows
 // =============================================================================
 
+/**
+ * Row of the `mcps` table. `title`, `description`, `version` and `source` are
+ * copies of manifest fields, denormalized so lists need not load the manifest.
+ */
 export interface Mcp {
   api_host: string;
   manifest: McpManifest;
@@ -24,6 +28,7 @@ export interface Mcp {
 /** List row: the manifest is omitted and replaced by its tool count. */
 export type McpSummary = Omit<Mcp, 'manifest'> & { tool_count: number };
 
+/** Row of the `skills` table: one agent skill (SKILL.md) per API host. */
 export interface Skill {
   api_host: string;
   name: string;
@@ -37,6 +42,7 @@ export interface Skill {
 /** List row: the markdown body is omitted. */
 export type SkillSummary = Omit<Skill, 'markdown'>;
 
+/** Row of the `sites` table: a crawled origin and the API hosts it calls. */
 export interface Site {
   /** Crawled origin, e.g. `https://www.example.com`. */
   origin: string;
@@ -89,14 +95,20 @@ export interface SiteCreateRequest extends SiteUpsertRequest {
 // Query parameters
 // =============================================================================
 
+/** Query string for list routes. The schema coerces strings to numbers. */
 export interface ListQueryParams {
-  /** Case-insensitive substring match on host, title and description. */
+  /**
+   * Case-insensitive substring match. raidr_api matches the key column
+   * (`api_host` or `origin`), then `title` (`name` for skills), then
+   * `description`.
+   */
   q?: string;
   /** Default 50, maximum 200. */
   limit?: number;
   offset?: number;
 }
 
+/** Query string for `GET /sites`. */
 export interface SiteListQueryParams extends ListQueryParams {
   /** Only sites that call this API host. */
   apiHost?: string;
@@ -106,6 +118,7 @@ export interface SiteListQueryParams extends ListQueryParams {
 // Health
 // =============================================================================
 
+/** Payload of raidr_api's `GET /` and `GET /health`. */
 export interface HealthCheckData {
   name: string;
   version: string;

@@ -22,15 +22,22 @@ import type {
 } from '../index.js';
 import { TOOL_NAME_RE, extractPathParams } from '../index.js';
 
+/** Bare host name with an optional port; no scheme, path or credentials. */
 const HOST_RE =
   /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:\d{1,5})?$/i;
 
+/** An API host such as `api.example.com` or `localhost:8080`, at most 253 chars. */
 export const apiHostSchema = z
   .string()
   .min(1)
   .max(253)
   .regex(HOST_RE, 'must be a bare host name such as api.example.com');
 
+/**
+ * A bare origin (`https://www.example.com`): the value must equal its own
+ * `new URL(value).origin`, so trailing slashes, paths and queries are rejected.
+ * Keeps one canonical key per site in the `sites` table.
+ */
 export const originSchema = z
   .string()
   .url()
@@ -45,6 +52,11 @@ export const originSchema = z
     { message: 'must be an origin such as https://www.example.com' }
   );
 
+/**
+ * Minimal structural check of a tool input schema. `.loose()` keeps every
+ * other JSON Schema keyword, because the schema is served to MCP clients
+ * verbatim.
+ */
 export const jsonSchemaObjectSchema = z
   .object({
     type: z.literal('object'),
@@ -59,6 +71,7 @@ export const jsonSchemaObjectSchema = z
   })
   .loose() satisfies z.ZodType<JsonSchemaObject>;
 
+/** `McpAuth`, plus the per-style required field checks. */
 export const mcpAuthSchema = z
   .object({
     style: z.enum(['bearer', 'header', 'cookie', 'none']),
@@ -75,6 +88,7 @@ export const mcpAuthSchema = z
     path: ['cookieName'],
   }) satisfies z.ZodType<McpAuth>;
 
+/** `HttpMethod`. */
 export const httpMethodSchema = z.enum([
   'GET',
   'POST',
@@ -83,6 +97,7 @@ export const httpMethodSchema = z.enum([
   'DELETE',
 ]);
 
+/** `McpToolRequest`: pathTemplate must stay on the host; GET has no body. */
 export const mcpToolRequestSchema = z
   .object({
     method: httpMethodSchema,
@@ -107,6 +122,12 @@ export const mcpToolRequestSchema = z
     path: ['body'],
   }) satisfies z.ZodType<McpToolRequest>;
 
+/**
+ * `McpTool`. Cross-checks the request mapping against `inputSchema`: every
+ * path placeholder, query key, header key and body field must be a declared
+ * input property, so a tool can never reference a field the client cannot
+ * send.
+ */
 export const mcpToolSchema = z
   .object({
     name: z
@@ -157,6 +178,7 @@ export const mcpToolSchema = z
     check(tool.request.bodyFields ?? [], 'bodyFields');
   }) satisfies z.ZodType<McpTool>;
 
+/** `McpSource`. */
 export const mcpSourceSchema = z.object({
   bundleName: z.string().min(1),
   crawlerVersion: z.string().min(1),
@@ -164,6 +186,11 @@ export const mcpSourceSchema = z.object({
   capturedAt: z.string().optional(),
 }) satisfies z.ZodType<McpSource>;
 
+/**
+ * `McpManifest`, the rule set shared by raidr_api (on write) and
+ * raidr_crawler (`publish --dry-run`). Beyond field shapes it requires that
+ * `baseUrl`'s host equals `apiHost` and that tool names are unique.
+ */
 export const mcpManifestSchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -225,10 +252,12 @@ export const mcpManifestSchema = z
     });
   }) satisfies z.ZodType<McpManifest>;
 
+/** Body of `POST /mcps` and `PUT /mcps/:apiHost`. */
 export const mcpUpsertSchema = z.object({
   manifest: mcpManifestSchema,
 }) satisfies z.ZodType<McpUpsertRequest>;
 
+/** Body of `PUT /skills/:apiHost`. */
 export const skillUpsertSchema = z.object({
   name: z.string().min(1).max(200),
   description: z.string().optional(),
@@ -236,10 +265,12 @@ export const skillUpsertSchema = z.object({
   version: z.string().optional(),
 }) satisfies z.ZodType<SkillUpsertRequest>;
 
+/** Body of `POST /skills`: the upsert body plus `api_host`. */
 export const skillCreateSchema = skillUpsertSchema.extend({
   api_host: apiHostSchema,
 }) satisfies z.ZodType<SkillCreateRequest>;
 
+/** Body of `PUT /sites/:origin`. `last_crawled_at` is an ISO 8601 string. */
 export const siteUpsertSchema = z.object({
   title: z.string().optional(),
   description: z.string().optional(),
@@ -247,16 +278,23 @@ export const siteUpsertSchema = z.object({
   last_crawled_at: z.string().optional(),
 }) satisfies z.ZodType<SiteUpsertRequest>;
 
+/** Body of `POST /sites`: the upsert body plus `origin`. */
 export const siteCreateSchema = siteUpsertSchema.extend({
   origin: originSchema,
 }) satisfies z.ZodType<SiteCreateRequest>;
 
+/**
+ * `?q&limit&offset` for list routes. Coerces query-string numbers and fills
+ * defaults (limit 50, max 200; offset 0). Not bound with `satisfies`: its
+ * output has required `limit`/`offset`, unlike `ListQueryParams`.
+ */
 export const listQuerySchema = z.object({
   q: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
   offset: z.coerce.number().int().min(0).default(0),
 });
 
+/** `listQuerySchema` plus the optional `apiHost` filter for `GET /sites`. */
 export const siteListQuerySchema = listQuerySchema.extend({
   apiHost: apiHostSchema.optional(),
 });

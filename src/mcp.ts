@@ -25,26 +25,52 @@ export interface JsonSchemaObject {
  */
 export type McpAuthStyle = 'bearer' | 'header' | 'cookie' | 'none';
 
+/**
+ * Credential placement for one API host. raidr stores no credentials: the
+ * caller supplies a token per MCP connection and raidr_api's `applyAuth`
+ * places it as described here. The zod schema requires `headerName` for
+ * `header` and `cookieName` for `cookie`.
+ */
 export interface McpAuth {
   style: McpAuthStyle;
   /** Required when style is `header`. */
   headerName?: string;
   /** Required when style is `cookie`. */
   cookieName?: string;
-  /** Text placed before the token; `Bearer ` for bearer, empty for header. */
+  /**
+   * Text placed before the token; defaults to `Bearer ` for bearer and empty
+   * for header. Ignored for cookie.
+   */
   tokenPrefix?: string;
 }
 
+/** Methods a tool may use upstream. GET never carries a body. */
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
-/** Maps a tool's input fields onto one HTTP request. */
+/**
+ * Maps a tool's input fields onto one HTTP request. Every field named here
+ * (path placeholder, query key, header key, body field) must exist in the
+ * tool's `inputSchema.properties`; `mcpToolSchema` enforces that.
+ */
 export interface McpToolRequest {
   method: HttpMethod;
-  /** Path relative to the manifest `baseUrl`, with `{param}` placeholders. */
+  /**
+   * Path relative to the manifest `baseUrl`, with `{param}` placeholders.
+   * Must start with `/` and must not start with `//`, contain `://` or contain
+   * a backslash: any of those could move the request, and the caller's token,
+   * off `apiHost`.
+   */
   pathTemplate: string;
-  /** Input field name → query parameter name. */
+  /**
+   * Input field name → query parameter name. raidr_api appends one parameter
+   * per element for array values and skips undefined or null values.
+   */
   query?: Record<string, string>;
-  /** Body encoding for non-GET requests; null or absent means no body. */
+  /**
+   * Body encoding for non-GET requests; null or absent means no body.
+   * Exception: raidr_api still sends a JSON body when this is absent but
+   * `bodyFields` is non-empty.
+   */
   body?: 'json' | 'form' | null;
   /** Input fields sent in the body. Defaults to every field not used by the path, query or headers. */
   bodyFields?: string[];
@@ -52,6 +78,7 @@ export interface McpToolRequest {
   headers?: Record<string, string>;
 }
 
+/** Optional description of what the upstream returns; informational only. */
 export interface McpToolResponseHints {
   contentType?: string;
   description?: string;
@@ -67,16 +94,19 @@ export interface McpToolEvidence {
   chunk?: string;
 }
 
+/** One MCP tool: a JSON Schema input plus the HTTP request it maps onto. */
 export interface McpTool {
   /** Unique within the manifest; `^[a-z][a-z0-9_]{1,63}$`. */
   name: string;
   description: string;
+  /** Served to MCP clients as-is; raidr_api does not convert it to zod. */
   inputSchema: JsonSchemaObject;
   request: McpToolRequest;
   responseHints?: McpToolResponseHints;
   evidence?: McpToolEvidence;
 }
 
+/** Provenance of a manifest: which capture bundle and crawler produced it. */
 export interface McpSource {
   bundleName: string;
   crawlerVersion: string;
@@ -85,18 +115,33 @@ export interface McpSource {
   capturedAt?: string;
 }
 
+/**
+ * The full description of one API host. Fields are camelCase because this is
+ * a document stored whole in a JSONB column, not a database row.
+ */
 export interface McpManifest {
+  /** Always `MCP_SCHEMA_VERSION`; the schema rejects anything else. */
   schemaVersion: 1;
-  /** Primary key, e.g. `api.example.com`. */
+  /**
+   * Primary key, e.g. `api.example.com` (a port is allowed). The schema
+   * requires it to equal the host of `baseUrl`.
+   */
   apiHost: string;
-  /** Origin every `pathTemplate` is relative to, e.g. `https://api.example.com`. */
+  /**
+   * Origin every `pathTemplate` is relative to, e.g. `https://api.example.com`.
+   * May include a base path (`https://h/v1`); must be http(s) with no
+   * credentials, query or hash.
+   */
   baseUrl: string;
   /** Sites observed calling this API. */
   siteOrigins: string[];
   title: string;
   description: string;
   auth: McpAuth;
-  /** Non-secret headers every upstream call needs, e.g. a client version. */
+  /**
+   * Non-secret headers every upstream call needs, e.g. a client version.
+   * Anyone can read a manifest, so never put a credential here.
+   */
   staticHeaders?: Record<string, string>;
   tools: McpTool[];
   /** Crawler-assigned; bumps when the content changes. */
