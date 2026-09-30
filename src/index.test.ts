@@ -5,6 +5,7 @@ import {
   fillPathTemplate,
   mcpProxyUrl,
   paginatedResponse,
+  resolveUpstreamUrl,
   successResponse,
 } from './index.js';
 
@@ -48,6 +49,26 @@ describe('path helpers', () => {
   it('fills and encodes params', () => {
     expect(fillPathTemplate('/u/{id}/x', { id: 'a b' })).toBe('/u/a%20b/x');
     expect(() => fillPathTemplate('/u/{id}', {})).toThrow(/id/);
+  });
+
+  it('resolves upstream urls on the api host only', () => {
+    expect(
+      resolveUpstreamUrl(
+        'https://api.example.com/v1/',
+        '/users/7',
+        'api.example.com'
+      ).toString()
+    ).toBe('https://api.example.com/v1/users/7');
+    expect(() =>
+      resolveUpstreamUrl(
+        'https://api.example.com',
+        '//evil.com/x',
+        'api.example.com'
+      )
+    ).toThrow();
+    expect(() =>
+      resolveUpstreamUrl('https://api.example.com', '/x', 'other.example.com')
+    ).toThrow();
   });
 
   it('builds the proxy url', () => {

@@ -50,6 +50,24 @@ describe('mcpManifestSchema', () => {
     expect(result.success).toBe(false);
   });
 
+  it('rejects a baseUrl with credentials or a non-http scheme', () => {
+    for (const baseUrl of [
+      'https://u:p@api.example.com',
+      'ftp://api.example.com',
+      'https://api.example.com/?x=1',
+    ]) {
+      expect(
+        mcpManifestSchema.safeParse({ ...manifest, baseUrl }).success
+      ).toBe(false);
+    }
+    expect(
+      mcpManifestSchema.safeParse({
+        ...manifest,
+        baseUrl: 'https://api.example.com/v1',
+      }).success
+    ).toBe(true);
+  });
+
   it('rejects duplicate tool names', () => {
     const result = mcpManifestSchema.safeParse({
       ...manifest,
@@ -91,6 +109,22 @@ describe('mcpToolSchema', () => {
       request: { ...tool.request, query: { missing: 'missing' } },
     });
     expect(result.success).toBe(false);
+  });
+
+  it('rejects path templates that name another host', () => {
+    for (const pathTemplate of [
+      '//evil.com/x',
+      '/redirect?to=https://evil.com',
+      '/\\evil.com',
+    ]) {
+      expect(
+        mcpToolSchema.safeParse({
+          ...tool,
+          request: { method: 'GET', pathTemplate },
+          inputSchema: { type: 'object', properties: {} },
+        }).success
+      ).toBe(false);
+    }
   });
 
   it('rejects bad names and GET bodies', () => {

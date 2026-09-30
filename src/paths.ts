@@ -32,3 +32,26 @@ export function fillPathTemplate(
 export function mcpProxyUrl(apiBaseUrl: string, apiHost: string): string {
   return `${apiBaseUrl.replace(/\/+$/, '')}/mcp/${encodeURIComponent(apiHost)}`;
 }
+
+/**
+ * Resolve a filled path against a manifest baseUrl by concatenation, keeping
+ * any base path (`https://h/v1` + `/users` → `https://h/v1/users`). Throws
+ * unless the result stays on `apiHost`, so a malformed manifest can never
+ * route a caller's token to another host.
+ */
+export function resolveUpstreamUrl(
+  baseUrl: string,
+  path: string,
+  apiHost: string
+): URL {
+  if (!path.startsWith('/') || path.startsWith('//') || path.includes('://')) {
+    throw new Error(`Path "${path}" is not a path on ${apiHost}`);
+  }
+  const base = new URL(baseUrl);
+  const basePath = base.pathname.replace(/\/+$/, '');
+  const url = new URL(`${base.origin}${basePath}${path}`);
+  if (url.host !== apiHost || url.origin !== base.origin) {
+    throw new Error(`Resolved URL ${url.origin} is not on ${apiHost}`);
+  }
+  return url;
+}

@@ -86,7 +86,17 @@ export const httpMethodSchema = z.enum([
 export const mcpToolRequestSchema = z
   .object({
     method: httpMethodSchema,
-    pathTemplate: z.string().startsWith('/'),
+    // A path, never a URL: '//host/x' and 'https://host/x' would send the
+    // caller's token to a host other than the manifest's apiHost.
+    pathTemplate: z
+      .string()
+      .startsWith('/')
+      .refine((path) => !path.startsWith('//') && !path.includes('://'), {
+        message: 'must be a path on the API host, not a URL',
+      })
+      .refine((path) => !path.includes('\\'), {
+        message: 'must not contain backslashes',
+      }),
     query: z.record(z.string(), z.string()).optional(),
     body: z.enum(['json', 'form']).nullable().optional(),
     bodyFields: z.array(z.string()).optional(),
@@ -158,7 +168,26 @@ export const mcpManifestSchema = z
   .object({
     schemaVersion: z.literal(1),
     apiHost: apiHostSchema,
-    baseUrl: z.string().url(),
+    baseUrl: z
+      .string()
+      .url()
+      .refine(
+        (value) => {
+          try {
+            const url = new URL(value);
+            return (
+              (url.protocol === 'https:' || url.protocol === 'http:') &&
+              url.username === '' &&
+              url.password === '' &&
+              url.search === '' &&
+              url.hash === ''
+            );
+          } catch {
+            return false;
+          }
+        },
+        { message: 'must be an http(s) URL without credentials, query or hash' }
+      ),
     siteOrigins: z.array(originSchema),
     title: z.string().min(1),
     description: z.string(),
