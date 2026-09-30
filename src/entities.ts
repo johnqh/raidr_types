@@ -4,7 +4,7 @@
  * strings in API responses.
  */
 
-import type { McpManifest, McpSource } from './mcp';
+import type { McpManifest, McpSource } from './mcp.js';
 
 // =============================================================================
 // Entity rows

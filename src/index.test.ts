@@ -6,7 +6,7 @@ import {
   mcpProxyUrl,
   paginatedResponse,
   successResponse,
-} from './index';
+} from './index.js';
 
 describe('response helpers', () => {
   it('wraps data in a success envelope', () => {

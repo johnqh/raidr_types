@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import type { McpManifest } from '../index';
+import type { McpManifest } from '../index.js';
 import {
   listQuerySchema,
   mcpManifestSchema,
   mcpToolSchema,
   originSchema,
   siteCreateSchema,
-} from './index';
+} from './index.js';
 
 const tool = {
   name: 'get_user',

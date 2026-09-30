@@ -18,10 +18,10 @@ export type {
   PaginationOptions,
 } from '@sudobility/types';
 
-export * from './mcp';
-export * from './entities';
-export * from './constants';
-export * from './paths';
+export * from './mcp.js';
+export * from './entities.js';
+export * from './constants.js';
+export * from './paths.js';
 
 // =============================================================================
 // Response helpers

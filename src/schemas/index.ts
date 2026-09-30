@@ -19,8 +19,8 @@ import type {
   SiteUpsertRequest,
   SkillCreateRequest,
   SkillUpsertRequest,
-} from '../index';
-import { TOOL_NAME_RE, extractPathParams } from '../index';
+} from '../index.js';
+import { TOOL_NAME_RE, extractPathParams } from '../index.js';
 
 const HOST_RE =
   /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:\d{1,5})?$/i;
