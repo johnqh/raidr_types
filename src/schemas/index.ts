@@ -1,0 +1,233 @@
+/**
+ * Zod schemas for the raidr wire types. Imported as
+ * `@sudobility/raidr_types/schemas`; needs `zod` v4 installed by the caller.
+ *
+ * Each schema is bound to its interface with `satisfies`, so the package
+ * fails to build when the two drift apart.
+ */
+
+import { z } from 'zod';
+import type {
+  JsonSchemaObject,
+  McpAuth,
+  McpManifest,
+  McpSource,
+  McpTool,
+  McpToolRequest,
+  McpUpsertRequest,
+  SiteCreateRequest,
+  SiteUpsertRequest,
+  SkillCreateRequest,
+  SkillUpsertRequest,
+} from '../index';
+import { TOOL_NAME_RE, extractPathParams } from '../index';
+
+const HOST_RE =
+  /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:\d{1,5})?$/i;
+
+export const apiHostSchema = z
+  .string()
+  .min(1)
+  .max(253)
+  .regex(HOST_RE, 'must be a bare host name such as api.example.com');
+
+export const originSchema = z
+  .string()
+  .url()
+  .refine(
+    (value) => {
+      try {
+        return new URL(value).origin === value;
+      } catch {
+        return false;
+      }
+    },
+    { message: 'must be an origin such as https://www.example.com' }
+  );
+
+export const jsonSchemaObjectSchema = z
+  .object({
+    type: z.literal('object'),
+    properties: z
+      .record(z.string(), z.record(z.string(), z.unknown()))
+      .optional(),
+    required: z.array(z.string()).optional(),
+    additionalProperties: z
+      .union([z.boolean(), z.record(z.string(), z.unknown())])
+      .optional(),
+    description: z.string().optional(),
+  })
+  .loose() satisfies z.ZodType<JsonSchemaObject>;
+
+export const mcpAuthSchema = z
+  .object({
+    style: z.enum(['bearer', 'header', 'cookie', 'none']),
+    headerName: z.string().min(1).optional(),
+    cookieName: z.string().min(1).optional(),
+    tokenPrefix: z.string().optional(),
+  })
+  .refine((auth) => auth.style !== 'header' || !!auth.headerName, {
+    message: 'headerName is required when style is "header"',
+    path: ['headerName'],
+  })
+  .refine((auth) => auth.style !== 'cookie' || !!auth.cookieName, {
+    message: 'cookieName is required when style is "cookie"',
+    path: ['cookieName'],
+  }) satisfies z.ZodType<McpAuth>;
+
+export const httpMethodSchema = z.enum([
+  'GET',
+  'POST',
+  'PUT',
+  'PATCH',
+  'DELETE',
+]);
+
+export const mcpToolRequestSchema = z
+  .object({
+    method: httpMethodSchema,
+    pathTemplate: z.string().startsWith('/'),
+    query: z.record(z.string(), z.string()).optional(),
+    body: z.enum(['json', 'form']).nullable().optional(),
+    bodyFields: z.array(z.string()).optional(),
+    headers: z.record(z.string(), z.string()).optional(),
+  })
+  .refine((request) => request.method !== 'GET' || !request.body, {
+    message: 'GET requests cannot carry a body',
+    path: ['body'],
+  }) satisfies z.ZodType<McpToolRequest>;
+
+export const mcpToolSchema = z
+  .object({
+    name: z
+      .string()
+      .regex(TOOL_NAME_RE, 'snake_case, 2-64 chars, letter first'),
+    description: z.string().min(1),
+    inputSchema: jsonSchemaObjectSchema,
+    request: mcpToolRequestSchema,
+    responseHints: z
+      .object({
+        contentType: z.string().optional(),
+        description: z.string().optional(),
+        example: z.unknown().optional(),
+      })
+      .optional(),
+    evidence: z
+      .object({
+        endpointKey: z.string(),
+        calls: z.number().int().nonnegative(),
+        chunk: z.string().optional(),
+      })
+      .optional(),
+  })
+  .superRefine((tool, ctx) => {
+    const fields = new Set(Object.keys(tool.inputSchema.properties ?? {}));
+    for (const param of extractPathParams(tool.request.pathTemplate)) {
+      if (!fields.has(param)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['request', 'pathTemplate'],
+          message: `path parameter "${param}" is not in inputSchema.properties`,
+        });
+      }
+    }
+    const check = (names: string[], where: string) => {
+      for (const name of names) {
+        if (!fields.has(name)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['request', where],
+            message: `"${name}" is not in inputSchema.properties`,
+          });
+        }
+      }
+    };
+    check(Object.keys(tool.request.query ?? {}), 'query');
+    check(Object.keys(tool.request.headers ?? {}), 'headers');
+    check(tool.request.bodyFields ?? [], 'bodyFields');
+  }) satisfies z.ZodType<McpTool>;
+
+export const mcpSourceSchema = z.object({
+  bundleName: z.string().min(1),
+  crawlerVersion: z.string().min(1),
+  analyzedBy: z.string().optional(),
+  capturedAt: z.string().optional(),
+}) satisfies z.ZodType<McpSource>;
+
+export const mcpManifestSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    apiHost: apiHostSchema,
+    baseUrl: z.string().url(),
+    siteOrigins: z.array(originSchema),
+    title: z.string().min(1),
+    description: z.string(),
+    auth: mcpAuthSchema,
+    staticHeaders: z.record(z.string(), z.string()).optional(),
+    tools: z.array(mcpToolSchema),
+    version: z.string().min(1),
+    generatedAt: z.string().min(1),
+    source: mcpSourceSchema,
+  })
+  .superRefine((manifest, ctx) => {
+    let host: string | null = null;
+    try {
+      host = new URL(manifest.baseUrl).host;
+    } catch {
+      host = null;
+    }
+    if (host !== manifest.apiHost) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['baseUrl'],
+        message: `baseUrl host must equal apiHost "${manifest.apiHost}"`,
+      });
+    }
+    const names = new Set<string>();
+    manifest.tools.forEach((tool, index) => {
+      if (names.has(tool.name)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['tools', index, 'name'],
+          message: `duplicate tool name "${tool.name}"`,
+        });
+      }
+      names.add(tool.name);
+    });
+  }) satisfies z.ZodType<McpManifest>;
+
+export const mcpUpsertSchema = z.object({
+  manifest: mcpManifestSchema,
+}) satisfies z.ZodType<McpUpsertRequest>;
+
+export const skillUpsertSchema = z.object({
+  name: z.string().min(1).max(200),
+  description: z.string().optional(),
+  markdown: z.string().min(1),
+  version: z.string().optional(),
+}) satisfies z.ZodType<SkillUpsertRequest>;
+
+export const skillCreateSchema = skillUpsertSchema.extend({
+  api_host: apiHostSchema,
+}) satisfies z.ZodType<SkillCreateRequest>;
+
+export const siteUpsertSchema = z.object({
+  title: z.string().optional(),
+  description: z.string().optional(),
+  api_hosts: z.array(apiHostSchema),
+  last_crawled_at: z.string().optional(),
+}) satisfies z.ZodType<SiteUpsertRequest>;
+
+export const siteCreateSchema = siteUpsertSchema.extend({
+  origin: originSchema,
+}) satisfies z.ZodType<SiteCreateRequest>;
+
+export const listQuerySchema = z.object({
+  q: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
+export const siteListQuerySchema = listQuerySchema.extend({
+  apiHost: apiHostSchema.optional(),
+});
