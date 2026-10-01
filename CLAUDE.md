@@ -75,7 +75,10 @@ src/schemas/index.test.ts  schema accept/reject cases
 Values: `successResponse`, `errorResponse`, `paginatedResponse`,
 `extractPathParams`, `fillPathTemplate`, `mcpProxyUrl`, `resolveUpstreamUrl`,
 `RAIDR_TOKEN_HEADER` (`X-Raidr-Token`), `RAIDR_API_KEY_HEADER` (`X-API-Key`),
-`MCP_PROXY_PATH` (`/mcp`), `TOOL_NAME_RE`, `MCP_SCHEMA_VERSION` (`1`).
+`MCP_PROXY_PATH` (`/mcp`), `TOOL_NAME_RE`, `MCP_SCHEMA_VERSION` (`1`),
+`RAIDR_ENTITY_KEY_PREFIX` (`raidr`: entity API keys look like `raidr_<hex>`),
+`RAIDR_SETTINGS_FILE` (`~/.raidr/config.json`, where skills keep the key).
+Type `RaidrSettings` = `{ apiKey?, apiUrl? }`, the shape of that file.
 
 Schemas (`./schemas`): `apiHostSchema`, `originSchema`,
 `jsonSchemaObjectSchema`, `mcpAuthSchema`, `httpMethodSchema`,
