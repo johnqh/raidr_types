@@ -56,6 +56,104 @@ export interface Site {
 }
 
 // =============================================================================
+// Crawl jobs (the work queue)
+// =============================================================================
+
+/**
+ * - `queued`: waiting for a worker.
+ * - `running`: claimed; `lease_until` says until when. A job whose lease ran
+ *   out goes back to the queue (up to `CRAWL_JOB_MAX_ATTEMPTS` attempts).
+ * - `done`: crawled and processed; the site's `last_crawled_at` was set.
+ * - `failed`: gave up; enqueue it again to retry.
+ */
+export type CrawlJobStatus = 'queued' | 'running' | 'done' | 'failed';
+
+/** What a worker reports when a job finishes; stored on the job. */
+export interface CrawlJobResult {
+  /** ISO 8601: when the site was actually crawled (the bundle's start time). */
+  crawled_at: string | null;
+  /** Rendering verdict: client-api, hybrid, server-rendered or unknown. */
+  rendering: string | null;
+  pages: number | null;
+  scripts: number | null;
+  /** API hosts that got an MCP server and skill from this crawl. */
+  api_hosts: string[];
+  tools: number;
+  /** API hosts seen but not published (infrastructure, too few endpoints). */
+  skipped_hosts: number;
+  seconds: number;
+}
+
+/**
+ * Row of the `crawl_jobs` table. One row per attempt to crawl an origin;
+ * history is kept, and at most one row per origin is `queued` or `running`.
+ */
+export interface CrawlJob {
+  id: string;
+  origin: string;
+  status: CrawlJobStatus;
+  /** Crawl even though the site was crawled before. */
+  force: boolean;
+  /** Higher runs first; ties run oldest first. */
+  priority: number;
+  attempts: number;
+  /** Free text: who asked (`raidr-crawler`, `raidr-app`, a user id ...). */
+  requested_by: string | null;
+  /** Worker id that holds or last held the job. */
+  worker: string | null;
+  lease_until: Date | null;
+  result: CrawlJobResult | null;
+  error: string | null;
+  created_at: Date | null;
+  updated_at: Date | null;
+  started_at: Date | null;
+  finished_at: Date | null;
+}
+
+/** Body of `POST /crawl-jobs`. */
+export interface CrawlJobEnqueueRequest {
+  origins: string[];
+  /** Queue sites that were crawled before. Default false. */
+  force?: boolean;
+  priority?: number;
+  requested_by?: string;
+}
+
+/**
+ * Per-origin outcome of an enqueue:
+ * - `queued`: a new job was created.
+ * - `already-queued`: a job is queued or running already (`force` upgrades it).
+ * - `already-crawled`: the site has `last_crawled_at` and `force` was not set.
+ */
+export interface CrawlJobEnqueueResult {
+  origin: string;
+  outcome: 'queued' | 'already-queued' | 'already-crawled';
+  job: CrawlJob | null;
+  last_crawled_at: Date | null;
+}
+
+/** Body of `POST /crawl-jobs/claim`. */
+export interface CrawlJobClaimRequest {
+  worker: string;
+  /** Default 1800 (30 minutes). */
+  lease_seconds?: number;
+}
+
+/** Body of `POST /crawl-jobs/:id/heartbeat`. */
+export interface CrawlJobHeartbeatRequest {
+  worker: string;
+  lease_seconds?: number;
+}
+
+/** Body of `POST /crawl-jobs/:id/complete`. */
+export interface CrawlJobCompleteRequest {
+  worker: string;
+  status: 'done' | 'failed';
+  result?: CrawlJobResult;
+  error?: string;
+}
+
+// =============================================================================
 // Request bodies
 // =============================================================================
 
@@ -106,6 +204,11 @@ export interface ListQueryParams {
   /** Default 50, maximum 200. */
   limit?: number;
   offset?: number;
+}
+
+/** Query string for `GET /crawl-jobs`. `q` matches the origin. */
+export interface CrawlJobListQueryParams extends ListQueryParams {
+  status?: CrawlJobStatus;
 }
 
 /** Query string for `GET /sites`. */

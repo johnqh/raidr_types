@@ -8,6 +8,11 @@
 
 import { z } from 'zod';
 import type {
+  CrawlJobClaimRequest,
+  CrawlJobCompleteRequest,
+  CrawlJobEnqueueRequest,
+  CrawlJobHeartbeatRequest,
+  CrawlJobResult,
   JsonSchemaObject,
   McpAuth,
   McpManifest,
@@ -297,4 +302,65 @@ export const listQuerySchema = z.object({
 /** `listQuerySchema` plus the optional `apiHost` filter for `GET /sites`. */
 export const siteListQuerySchema = listQuerySchema.extend({
   apiHost: apiHostSchema.optional(),
+});
+
+// =============================================================================
+// Crawl jobs
+// =============================================================================
+
+export const crawlJobStatusSchema = z.enum([
+  'queued',
+  'running',
+  'done',
+  'failed',
+]);
+
+/** `CrawlJobResult`. */
+export const crawlJobResultSchema = z.object({
+  crawled_at: z.string().datetime({ offset: true }).nullable(),
+  rendering: z.string().nullable(),
+  pages: z.number().int().nullable(),
+  scripts: z.number().int().nullable(),
+  api_hosts: z.array(apiHostSchema),
+  tools: z.number().int().min(0),
+  skipped_hosts: z.number().int().min(0),
+  seconds: z.number().min(0),
+}) satisfies z.ZodType<CrawlJobResult>;
+
+/** Body of `POST /crawl-jobs`: 1 to 500 origins. */
+export const crawlJobEnqueueSchema = z.object({
+  origins: z.array(originSchema).min(1).max(500),
+  force: z.boolean().optional(),
+  priority: z.number().int().min(-1000).max(1000).optional(),
+  requested_by: z.string().max(200).optional(),
+}) satisfies z.ZodType<CrawlJobEnqueueRequest>;
+
+const workerSchema = z.string().min(1).max(200);
+const leaseSchema = z
+  .number()
+  .int()
+  .min(30)
+  .max(24 * 3600)
+  .optional();
+
+export const crawlJobClaimSchema = z.object({
+  worker: workerSchema,
+  lease_seconds: leaseSchema,
+}) satisfies z.ZodType<CrawlJobClaimRequest>;
+
+export const crawlJobHeartbeatSchema = z.object({
+  worker: workerSchema,
+  lease_seconds: leaseSchema,
+}) satisfies z.ZodType<CrawlJobHeartbeatRequest>;
+
+export const crawlJobCompleteSchema = z.object({
+  worker: workerSchema,
+  status: z.enum(['done', 'failed']),
+  result: crawlJobResultSchema.optional(),
+  error: z.string().max(4000).optional(),
+}) satisfies z.ZodType<CrawlJobCompleteRequest>;
+
+/** `GET /crawl-jobs` query. */
+export const crawlJobListQuerySchema = listQuerySchema.extend({
+  status: crawlJobStatusSchema.optional(),
 });

@@ -80,6 +80,14 @@ Values: `successResponse`, `errorResponse`, `paginatedResponse`,
 `RAIDR_SETTINGS_FILE` (`~/.raidr/config.json`, where skills keep the key).
 Type `RaidrSettings` = `{ apiKey?, apiUrl? }`, the shape of that file.
 
+Crawl queue: `CrawlJob` (row of `crawl_jobs`), `CrawlJobStatus`
+(`queued|running|done|failed`), `CrawlJobResult` (incl. `crawled_at` and the
+published `api_hosts`), `CrawlJobEnqueueRequest`/`Result`
+(`queued|already-queued|already-crawled`), `CrawlJobClaimRequest`,
+`CrawlJobHeartbeatRequest`, `CrawlJobCompleteRequest`,
+`CrawlJobListQueryParams`; constants `CRAWL_JOB_MAX_ATTEMPTS` (3),
+`CRAWL_JOB_LEASE_SECONDS` (1800); zod `crawlJob*Schema` in `./schemas`.
+
 Schemas (`./schemas`): `apiHostSchema`, `originSchema`,
 `jsonSchemaObjectSchema`, `mcpAuthSchema`, `httpMethodSchema`,
 `mcpToolRequestSchema`, `mcpToolSchema`, `mcpSourceSchema`,

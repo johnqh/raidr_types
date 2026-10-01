@@ -1,6 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, test } from 'vitest';
 import type { McpManifest } from '../index.js';
 import {
+  crawlJobClaimSchema,
+  crawlJobCompleteSchema,
+  crawlJobEnqueueSchema,
   listQuerySchema,
   mcpManifestSchema,
   mcpToolSchema,
@@ -169,5 +172,50 @@ describe('origin and list schemas', () => {
       siteCreateSchema.safeParse({ origin: 'example.com', api_hosts: [] })
         .success
     ).toBe(false);
+  });
+});
+
+describe('crawl job schemas', () => {
+  test('enqueue takes origins, not URLs with paths', () => {
+    expect(
+      crawlJobEnqueueSchema.safeParse({
+        origins: ['https://suno.com'],
+        force: true,
+      }).success
+    ).toBe(true);
+    expect(
+      crawlJobEnqueueSchema.safeParse({ origins: ['https://suno.com/create'] })
+        .success
+    ).toBe(false);
+    expect(crawlJobEnqueueSchema.safeParse({ origins: [] }).success).toBe(
+      false
+    );
+  });
+  test('complete carries a result with the crawl time', () => {
+    const ok = crawlJobCompleteSchema.safeParse({
+      worker: 'w1',
+      status: 'done',
+      result: {
+        crawled_at: '2026-10-01T19:47:00.000Z',
+        rendering: 'hybrid',
+        pages: 10,
+        scripts: 611,
+        api_hosts: ['studio-api-prod.suno.com', 'suno.com'],
+        tools: 134,
+        skipped_hosts: 12,
+        seconds: 274,
+      },
+    });
+    expect(ok.success).toBe(true);
+    expect(
+      crawlJobCompleteSchema.safeParse({ worker: 'w1', status: 'running' })
+        .success
+    ).toBe(false);
+  });
+  test('claim leases are bounded', () => {
+    expect(
+      crawlJobClaimSchema.safeParse({ worker: 'w', lease_seconds: 5 }).success
+    ).toBe(false);
+    expect(crawlJobClaimSchema.safeParse({ worker: 'w' }).success).toBe(true);
   });
 });

@@ -45,3 +45,8 @@ export interface RaidrSettings {
   /** raidr_api base URL override; defaults to https://api.raidr.app. */
   apiUrl?: string;
 }
+
+/** A running crawl job whose lease expires is retried until this many attempts. */
+export const CRAWL_JOB_MAX_ATTEMPTS = 3;
+/** Default crawl job lease, in seconds. */
+export const CRAWL_JOB_LEASE_SECONDS = 1800;
