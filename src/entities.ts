@@ -5,6 +5,7 @@
  */
 
 import type { McpManifest, McpSource } from './mcp.js';
+import type { ApiDoc } from './apidoc.js';
 
 // =============================================================================
 // Entity rows
@@ -53,6 +54,59 @@ export interface Site {
   last_crawled_at: Date | null;
   created_at: Date | null;
   updated_at: Date | null;
+}
+
+/**
+ * Row of the `api_docs` table: the endpoint documentation for one API host.
+ * `title`, `description`, `version` and `source` are copies of doc fields.
+ */
+export interface ApiDocRow {
+  api_host: string;
+  doc: ApiDoc;
+  title: string | null;
+  description: string | null;
+  endpoint_count: number;
+  version: string | null;
+  source: McpSource | null;
+  created_at: Date | null;
+  updated_at: Date | null;
+}
+
+/** List and public view: no doc body. */
+export type ApiDocSummary = Omit<ApiDocRow, 'doc'>;
+
+/** Body of `PUT /apis/:apiHost`. */
+export interface ApiDocUpsertRequest {
+  doc: ApiDoc;
+}
+
+/** Body of `POST /apis/:apiHost/execute`: run one endpoint through raidr's proxy. */
+export interface ApiExecuteRequest {
+  /** `ApiEndpoint.id`. */
+  endpointId: string;
+  /** Values by `ApiParam.name`; omitted or null values are not sent. */
+  params: Record<string, unknown>;
+  /** Extra body fields, for endpoints with `additionalBody`. */
+  extraBody?: Record<string, unknown>;
+  /** The signed-in user's token for `user` endpoints. Never stored. */
+  userToken?: string;
+  /** The application key for `api_key` endpoints. Never stored. */
+  apiKey?: string;
+}
+
+/** What the upstream answered. */
+export interface ApiExecuteResult {
+  method: string;
+  /** The URL that was called (credentials in query parameters are masked). */
+  url: string;
+  status: number;
+  statusText: string;
+  headers: Record<string, string>;
+  contentType: string | null;
+  /** Response text; pretty-printed when it is JSON. */
+  body: string;
+  bodyTruncated: boolean;
+  durationMs: number;
 }
 
 // =============================================================================

@@ -20,6 +20,7 @@ export type {
 
 export * from './mcp.js';
 export * from './entities.js';
+export * from './apidoc.js';
 export * from './constants.js';
 export * from './paths.js';
 

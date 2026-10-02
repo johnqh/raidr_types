@@ -4,7 +4,7 @@ Shared TypeScript types for the raidr platform: MCP manifests, skills, sites,
 and the request/response shapes of `raidr_api`.
 
 ```bash
-npm install @sudobility/raidr_types
+bun add @sudobility/raidr_types
 ```
 
 ## Exports
@@ -24,8 +24,17 @@ an `McpToolRequest` that maps input fields onto path, query, header and body.
 The hosted MCP server in `raidr_api` proxies tool calls from that mapping and
 forwards the caller's `X-Raidr-Token` per `McpAuth`.
 
+## API docs
+
+One `ApiDoc` per API host lists its endpoints with typed parameters (text,
+number, enum, boolean, JSON, with formats and validation hints), the credential
+each needs (`none`, `user` or `api_key`), and `EndpointLink`s between
+endpoints (an auth token or an id that one response supplies to a later
+request), which `ApiFlow` serves as a flow map. `ApiExecuteRequest` /
+`ApiExecuteResult` are the body and reply of `raidr_api`'s execute proxy.
+
 ## Related projects
 
-- `raidr_api` — CRUD for manifests, skills and sites plus the hosted MCP server
+- `raidr_api` — CRUD for manifests, skills, sites and API docs plus the hosted MCP server
 - `raidr_crawler` — crawls a site, analyses the bundle, publishes manifests
 - `raidr_client` / `raidr_lib` / `raidr_app` — front-end stack

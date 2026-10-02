@@ -22,12 +22,14 @@ the same schemas, so a manifest that passes locally passes on the server.
 ```
 src/index.ts               root export: re-exports + response helpers (no zod)
 src/mcp.ts                 McpManifest, McpTool, McpAuth, McpToolRequest
+src/apidoc.ts              ApiDoc, ApiEndpoint, ApiParam, EndpointLink, ApiFlow, endpointRef
 src/entities.ts            DB rows on the wire, request bodies, query params
 src/constants.ts           header names, proxy path, TOOL_NAME_RE
 src/paths.ts               extractPathParams, fillPathTemplate, mcpProxyUrl, resolveUpstreamUrl
 src/schemas/index.ts       zod schemas, exported as ./schemas (zod is an optional peer)
 src/index.test.ts          response helpers and path functions
 src/schemas/index.test.ts  schema accept/reject cases
+src/apidoc.test.ts         endpointRef / parseEndpointRef and the api doc schemas
 ```
 
 ## The two exports
@@ -65,9 +67,13 @@ src/schemas/index.test.ts  schema accept/reject cases
 | Rows | `Skill` | `skills` row: SKILL.md markdown per API host |
 | Rows | `SkillSummary` | `Skill` without `markdown` (list rows) |
 | Rows | `Site` | `sites` row: origin and the `api_hosts` it calls |
+| Rows | `ApiDocRow` | `api_docs` row: `doc` plus copied title/description/version/source and `endpoint_count` |
+| Rows | `ApiDocSummary` | `ApiDocRow` without `doc` (list and public summary) |
 | Bodies | `McpUpsertRequest` | `{ manifest }` for POST `/mcps` and PUT `/mcps/:apiHost` |
 | Bodies | `SkillUpsertRequest` / `SkillCreateRequest` | PUT `/skills/:apiHost` / POST `/skills` (adds `api_host`) |
 | Bodies | `SiteUpsertRequest` / `SiteCreateRequest` | PUT `/sites/:origin` / POST `/sites` (adds `origin`) |
+| Bodies | `ApiDocUpsertRequest` | `{ doc }` for PUT `/apis/:apiHost` |
+| Bodies | `ApiExecuteRequest` / `ApiExecuteResult` | POST `/apis/:apiHost/execute`: endpoint id, params, credentials (never stored) / upstream status, headers, body |
 | Query | `ListQueryParams` | `q`, `limit` (default 50, max 200), `offset` |
 | Query | `SiteListQueryParams` | adds the `apiHost` filter |
 | Health | `HealthCheckData` | `{ name, version, status: 'healthy' }` |
@@ -88,12 +94,36 @@ published `api_hosts`), `CrawlJobEnqueueRequest`/`Result`
 `CrawlJobListQueryParams`; constants `CRAWL_JOB_MAX_ATTEMPTS` (3),
 `CRAWL_JOB_LEASE_SECONDS` (1800); zod `crawlJob*Schema` in `./schemas`.
 
+API docs (`src/apidoc.ts`): `ApiDoc` (one per API host: `baseUrl`,
+`siteOrigins`, `auth`, `endpoints`, optional `links`), `ApiEndpoint` (`id` is
+`METHOD path`; `auth`; `params`; `responses`; optional `role: 'login'`),
+`ApiParam` (`in` path/query/header/body; `type` incl. `enum`, with
+`enumExhaustive`, `itemType`, `format` uuid/email/uri/date/date-time,
+`pattern`, min/max length and value, `example`, `wireName` when the wire name
+differs), `EndpointAuth` (`none|user|api_key`), `ApiUserAuth` (bearer, header
+or cookie, plus `loginUrl`/`tokenHint`), `ApiKeyAuth` (header or query),
+`EndpointLink` (`kind` `auth|data`, `evidence` `observed|inferred`,
+`fromField`, `toParam`, `count`), `EndpointNodeRef`, `ApiFlow` and
+`ExternalEndpointLabel`. Values `endpointRef(baseUrl, endpoint)` →
+`METHOD https://host/path` and `parseEndpointRef` (null when invalid).
+
 Schemas (`./schemas`): `apiHostSchema`, `originSchema`,
 `jsonSchemaObjectSchema`, `mcpAuthSchema`, `httpMethodSchema`,
 `mcpToolRequestSchema`, `mcpToolSchema`, `mcpSourceSchema`,
 `mcpManifestSchema`, `mcpUpsertSchema`, `skillUpsertSchema`,
 `skillCreateSchema`, `siteUpsertSchema`, `siteCreateSchema`,
-`listQuerySchema`, `siteListQuerySchema`.
+`listQuerySchema`, `siteListQuerySchema`, `apiParamSchema`,
+`apiEndpointSchema`, `endpointLinkSchema`, `apiDocSchema`,
+`apiDocUpsertSchema`, `apiExecuteSchema`.
+
+`apiDocSchema` refinements: `baseUrl` host equals `apiHost` and has no query,
+hash or credentials; endpoint ids are unique and equal `METHOD path`; every
+`{param}` has a `path` param (identifier, always required); an `enum` param
+lists values; GET has no body; endpoint paths follow the `pathTemplate` rules
+below; every link ends at one of this doc's endpoints (a same-host `from` must
+too, and no endpoint feeds itself; at most 5000 links); `user` / `api_key`
+endpoints need `auth.user` / `auth.apiKey`. `apiExecuteSchema` caps
+`userToken` at 16384 and `apiKey` at 4096 characters.
 
 ## Manifest semantics
 
@@ -192,7 +222,7 @@ readers tolerate the old shape.
 
 ## Commands
 
-All run with Bun on this repo; all pass (19 tests in 2 files).
+All run with Bun on this repo; all pass (29 tests in 3 files).
 
 | Command | Does |
 | --- | --- |
@@ -215,3 +245,8 @@ All run with Bun on this repo; all pass (19 tests in 2 files).
 - `mcpProxyUrl` URL-encodes the host: `localhost:8080` becomes
   `localhost%3A8080` in the path.
 - Prettier here uses single quotes; raidr_api uses double quotes.
+- `ApiEndpoint.id` is `METHOD path` relative to the doc; an `endpointRef` is
+  `METHOD https://host/path` and is what raidr_app puts in `?endpoint=`. Do
+  not mix the two.
+- `ApiDoc.links` holds only links that end on this host. raidr_api stores
+  them in a separate table so a flow can be read from either end.

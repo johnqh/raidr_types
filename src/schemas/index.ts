@@ -8,6 +8,12 @@
 
 import { z } from 'zod';
 import type {
+  EndpointLink,
+  ApiDoc,
+  ApiDocUpsertRequest,
+  ApiEndpoint,
+  ApiExecuteRequest,
+  ApiParam,
   CrawlJobClaimRequest,
   CrawlJobCompleteRequest,
   CrawlJobEnqueueRequest,
@@ -364,3 +370,272 @@ export const crawlJobCompleteSchema = z.object({
 export const crawlJobListQuerySchema = listQuerySchema.extend({
   status: crawlJobStatusSchema.optional(),
 });
+
+// =============================================================================
+// API documentation
+// =============================================================================
+
+/** A path on the API host, never a URL (same rule as `mcpToolRequestSchema`). */
+const apiPathSchema = z
+  .string()
+  .startsWith('/')
+  .refine((path) => !path.startsWith('//') && !path.includes('://'), {
+    message: 'must be a path on the API host, not a URL',
+  })
+  .refine((path) => !path.includes('\\'), {
+    message: 'must not contain backslashes',
+  });
+
+/** `ApiParam`. Path and query names must be safe identifiers for the URL builder. */
+export const apiParamSchema = z
+  .object({
+    name: z.string().min(1).max(200),
+    in: z.enum(['path', 'query', 'header', 'body']),
+    type: z.enum([
+      'string',
+      'integer',
+      'number',
+      'boolean',
+      'enum',
+      'object',
+      'array',
+    ]),
+    required: z.boolean(),
+    description: z.string().optional(),
+    enum: z.array(z.string()).optional(),
+    enumExhaustive: z.boolean().optional(),
+    itemType: z
+      .enum(['string', 'integer', 'number', 'boolean', 'object'])
+      .optional(),
+    format: z.enum(['uuid', 'email', 'uri', 'date', 'date-time']).optional(),
+    pattern: z.string().optional(),
+    minLength: z.number().int().min(0).optional(),
+    maxLength: z.number().int().min(0).optional(),
+    minimum: z.number().optional(),
+    maximum: z.number().optional(),
+    example: z.unknown().optional(),
+    wireName: z.string().min(1).optional(),
+  })
+  .refine((p) => p.type !== 'enum' || (p.enum?.length ?? 0) > 0, {
+    message: 'an enum parameter lists its values',
+    path: ['enum'],
+  })
+  .refine((p) => p.in !== 'path' || /^[A-Za-z_][A-Za-z0-9_]*$/.test(p.name), {
+    message: 'a path parameter name must be an identifier (it fills {name})',
+    path: ['name'],
+  })
+  .refine((p) => p.in !== 'path' || p.required, {
+    message: 'path parameters are always required',
+    path: ['required'],
+  }) satisfies z.ZodType<ApiParam>;
+
+/** `ApiEndpoint`: id is `METHOD path`; every `{param}` has a path parameter. */
+export const apiEndpointSchema = z
+  .object({
+    id: z.string().min(1),
+    method: httpMethodSchema,
+    path: apiPathSchema,
+    summary: z.string().min(1),
+    description: z.string().optional(),
+    auth: z.enum(['none', 'user', 'api_key']),
+    params: z.array(apiParamSchema),
+    body: z.enum(['json', 'form']).nullable().optional(),
+    additionalBody: z.boolean().optional(),
+    responses: z.array(
+      z.object({
+        status: z.number().int().min(100).max(599),
+        description: z.string().optional(),
+        contentType: z.string().optional(),
+        fields: z.array(z.string()).optional(),
+        example: z.string().max(8192).optional(),
+      })
+    ),
+    tag: z.string().optional(),
+    role: z.literal('login').optional(),
+  })
+  .superRefine((endpoint, ctx) => {
+    if (endpoint.id !== `${endpoint.method} ${endpoint.path}`) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['id'],
+        message: 'id must be "METHOD path"',
+      });
+    }
+    if (endpoint.method === 'GET' && endpoint.body) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['body'],
+        message: 'GET requests cannot carry a body',
+      });
+    }
+    const names = new Set<string>();
+    for (const [i, p] of endpoint.params.entries()) {
+      if (names.has(p.name)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['params', i, 'name'],
+          message: `duplicate parameter "${p.name}"`,
+        });
+      }
+      names.add(p.name);
+    }
+    const pathParams = new Set(
+      endpoint.params.filter((p) => p.in === 'path').map((p) => p.name)
+    );
+    for (const param of extractPathParams(endpoint.path)) {
+      if (!pathParams.has(param)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['path'],
+          message: `path parameter "${param}" is not documented`,
+        });
+      }
+    }
+  }) satisfies z.ZodType<ApiEndpoint>;
+
+const endpointNodeRefSchema = z.object({
+  apiHost: apiHostSchema,
+  endpointId: z.string().min(1),
+});
+
+/** `EndpointLink`. */
+export const endpointLinkSchema = z.object({
+  from: endpointNodeRefSchema,
+  to: endpointNodeRefSchema,
+  kind: z.enum(['auth', 'data']),
+  evidence: z.enum(['observed', 'inferred']),
+  fromField: z.string().max(500).optional(),
+  toParam: z.string().max(200).optional(),
+  count: z.number().int().min(0).optional(),
+}) satisfies z.ZodType<EndpointLink>;
+
+/** `ApiDoc`: `baseUrl` host equals `apiHost`; endpoint ids are unique. */
+export const apiDocSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    apiHost: apiHostSchema,
+    baseUrl: z.string().url(),
+    siteOrigins: z.array(originSchema),
+    title: z.string().min(1),
+    description: z.string(),
+    auth: z.object({
+      user: z
+        .object({
+          style: z.enum(['bearer', 'header', 'cookie']),
+          headerName: z.string().optional(),
+          cookieName: z.string().optional(),
+          tokenPrefix: z.string().optional(),
+          loginUrl: z.string().url().optional(),
+          tokenHint: z.string().optional(),
+        })
+        .refine((u) => u.style !== 'header' || !!u.headerName, {
+          message: 'header style requires headerName',
+        })
+        .refine((u) => u.style !== 'cookie' || !!u.cookieName, {
+          message: 'cookie style requires cookieName',
+        })
+        .optional(),
+      apiKey: z
+        .object({
+          in: z.enum(['header', 'query']),
+          name: z.string().min(1),
+          hint: z.string().optional(),
+        })
+        .optional(),
+    }),
+    endpoints: z.array(apiEndpointSchema),
+    links: z.array(endpointLinkSchema).max(5000).optional(),
+    version: z.string().min(1),
+    generatedAt: z.string().min(1),
+    source: mcpSourceSchema,
+  })
+  .superRefine((doc, ctx) => {
+    let host: string | null = null;
+    try {
+      const url = new URL(doc.baseUrl);
+      if (url.search || url.hash || url.username || url.password) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['baseUrl'],
+          message: 'baseUrl has no query, hash or credentials',
+        });
+      }
+      host = url.host;
+    } catch {
+      host = null;
+    }
+    if (host !== doc.apiHost) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['baseUrl'],
+        message: `baseUrl host must equal apiHost "${doc.apiHost}"`,
+      });
+    }
+    const ids = new Set<string>();
+    doc.endpoints.forEach((e, i) => {
+      if (ids.has(e.id))
+        ctx.addIssue({
+          code: 'custom',
+          path: ['endpoints', i, 'id'],
+          message: `duplicate endpoint "${e.id}"`,
+        });
+      ids.add(e.id);
+    });
+    // A doc carries the links into its own endpoints; `from` may be anywhere.
+    (doc.links ?? []).forEach((link, i) => {
+      if (link.to.apiHost !== doc.apiHost || !ids.has(link.to.endpointId)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['links', i, 'to'],
+          message: "a link must end at one of this doc's endpoints",
+        });
+      }
+      if (link.from.apiHost === doc.apiHost && !ids.has(link.from.endpointId)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['links', i, 'from'],
+          message: "a same-host link must start at one of this doc's endpoints",
+        });
+      }
+      if (
+        link.from.apiHost === link.to.apiHost &&
+        link.from.endpointId === link.to.endpointId
+      ) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['links', i],
+          message: 'an endpoint cannot feed itself',
+        });
+      }
+    });
+    const needsUser = doc.endpoints.some((e) => e.auth === 'user');
+    const needsKey = doc.endpoints.some((e) => e.auth === 'api_key');
+    if (needsUser && !doc.auth.user) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['auth', 'user'],
+        message: 'user endpoints need auth.user',
+      });
+    }
+    if (needsKey && !doc.auth.apiKey) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['auth', 'apiKey'],
+        message: 'api_key endpoints need auth.apiKey',
+      });
+    }
+  }) satisfies z.ZodType<ApiDoc>;
+
+/** Body of `PUT /apis/:apiHost`. */
+export const apiDocUpsertSchema = z.object({
+  doc: apiDocSchema,
+}) satisfies z.ZodType<ApiDocUpsertRequest>;
+
+/** Body of `POST /apis/:apiHost/execute`. Credentials are bounded, never stored. */
+export const apiExecuteSchema = z.object({
+  endpointId: z.string().min(1).max(500),
+  params: z.record(z.string(), z.unknown()),
+  extraBody: z.record(z.string(), z.unknown()).optional(),
+  userToken: z.string().max(16384).optional(),
+  apiKey: z.string().max(4096).optional(),
+}) satisfies z.ZodType<ApiExecuteRequest>;
