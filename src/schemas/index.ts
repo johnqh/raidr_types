@@ -31,13 +31,26 @@ import type {
   SkillCreateRequest,
   SkillUpsertRequest,
 } from '../index.js';
-import { TOOL_NAME_RE, extractPathParams } from '../index.js';
+import {
+  LABEL_RE,
+  MAX_LABELS,
+  TOOL_NAME_RE,
+  extractPathParams,
+} from '../index.js';
 
 /** Bare host name with an optional port; no scheme, path or credentials. */
 const HOST_RE =
   /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:\d{1,5})?$/i;
 
 /** An API host such as `api.example.com` or `localhost:8080`, at most 253 chars. */
+/** Up to `MAX_LABELS` distinct lowercase slugs. */
+export const labelsSchema = z
+  .array(z.string().regex(LABEL_RE, 'must be a lowercase slug'))
+  .max(MAX_LABELS)
+  .refine((labels) => new Set(labels).size === labels.length, {
+    message: 'labels must be unique',
+  });
+
 export const apiHostSchema = z
   .string()
   .min(1)
@@ -232,6 +245,7 @@ export const mcpManifestSchema = z
     auth: mcpAuthSchema,
     staticHeaders: z.record(z.string(), z.string()).optional(),
     tools: z.array(mcpToolSchema),
+    labels: labelsSchema.optional(),
     version: z.string().min(1),
     generatedAt: z.string().min(1),
     source: mcpSourceSchema,
@@ -286,6 +300,7 @@ export const siteUpsertSchema = z.object({
   title: z.string().optional(),
   description: z.string().optional(),
   api_hosts: z.array(apiHostSchema),
+  labels: labelsSchema.optional(),
   last_crawled_at: z.string().optional(),
 }) satisfies z.ZodType<SiteUpsertRequest>;
 
@@ -305,9 +320,26 @@ export const listQuerySchema = z.object({
   offset: z.coerce.number().int().min(0).default(0),
 });
 
-/** `listQuerySchema` plus the optional `apiHost` filter for `GET /sites`. */
+/** Comma-separated labels in a query string, as a slug list. */
+const labelQuerySchema = z
+  .string()
+  .max(500)
+  .transform((value) =>
+    value
+      .split(',')
+      .map((l) => l.trim().toLowerCase())
+      .filter((l) => LABEL_RE.test(l))
+  );
+
+/** `listQuerySchema` plus the optional `label` filter for `GET /mcps`. */
+export const mcpListQuerySchema = listQuerySchema.extend({
+  label: labelQuerySchema.optional(),
+});
+
+/** `listQuerySchema` plus the optional `apiHost` and `label` filters for `GET /sites`. */
 export const siteListQuerySchema = listQuerySchema.extend({
   apiHost: apiHostSchema.optional(),
+  label: labelQuerySchema.optional(),
 });
 
 // =============================================================================
@@ -339,6 +371,7 @@ export const crawlJobEnqueueSchema = z.object({
   force: z.boolean().optional(),
   priority: z.number().int().min(-1000).max(1000).optional(),
   requested_by: z.string().max(200).optional(),
+  labels: labelsSchema.optional(),
 }) satisfies z.ZodType<CrawlJobEnqueueRequest>;
 
 const workerSchema = z.string().min(1).max(200);

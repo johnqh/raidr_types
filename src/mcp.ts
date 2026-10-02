@@ -144,6 +144,11 @@ export interface McpManifest {
    */
   staticHeaders?: Record<string, string>;
   tools: McpTool[];
+  /**
+   * What the site behind this API is about, as lowercase slugs
+   * (`recipes`, `cooking`, `banking`). Lets apps pick servers by intent.
+   */
+  labels?: string[];
   /** Crawler-assigned; bumps when the content changes. */
   version: string;
   /** ISO 8601 timestamp. */

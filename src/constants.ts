@@ -55,3 +55,42 @@ export interface RaidrSettings {
 export const CRAWL_JOB_MAX_ATTEMPTS = 3;
 /** Default crawl job lease, in seconds. */
 export const CRAWL_JOB_LEASE_SECONDS = 1800;
+
+/** A label: a lowercase slug such as `recipes` or `real-estate`. */
+export const LABEL_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
+
+/** Most labels one site or MCP server carries. */
+export const MAX_LABELS = 12;
+
+/**
+ * Text as a label: `"Banks - United States"` → `banks-united-states`. Returns
+ * null when nothing usable is left.
+ */
+export function toLabel(text: string): string | null {
+  const slug = text
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  // Too long: cut at the last whole word that fits.
+  const cut =
+    slug.length > 40 ? slug.slice(0, 41).replace(/-[^-]*$/, '') : slug;
+  return LABEL_RE.test(cut) ? cut : null;
+}
+
+/** Labels merged in order, deduplicated, invalid ones dropped, capped at `MAX_LABELS`. */
+export function mergeLabels(
+  ...lists: Array<readonly string[] | undefined>
+): string[] {
+  const out: string[] = [];
+  for (const list of lists) {
+    for (const raw of list ?? []) {
+      const label = LABEL_RE.test(raw) ? raw : toLabel(raw);
+      if (label && !out.includes(label)) out.push(label);
+      if (out.length === MAX_LABELS) return out;
+    }
+  }
+  return out;
+}

@@ -22,6 +22,8 @@ export interface Mcp {
   description: string | null;
   version: string | null;
   source: McpSource | null;
+  /** Copy of `manifest.labels`, indexed for `GET /mcps?label=`. */
+  labels: string[];
   created_at: Date | null;
   updated_at: Date | null;
 }
@@ -51,6 +53,8 @@ export interface Site {
   description: string | null;
   /** API hosts this site was observed calling; each may have an Mcp row. */
   api_hosts: string[];
+  /** What the site is about (`recipes`, `banking`), as lowercase slugs. */
+  labels: string[];
   last_crawled_at: Date | null;
   created_at: Date | null;
   updated_at: Date | null;
@@ -153,6 +157,8 @@ export interface CrawlJob {
   attempts: number;
   /** Free text: who asked (`raidr-crawler`, `raidr-app`, a user id ...). */
   requested_by: string | null;
+  /** Labels the requester already knows (e.g. the crawl list's category); seeds the site's labels. */
+  labels: string[];
   /** Worker id that holds or last held the job. */
   worker: string | null;
   lease_until: Date | null;
@@ -171,6 +177,8 @@ export interface CrawlJobEnqueueRequest {
   force?: boolean;
   priority?: number;
   requested_by?: string;
+  /** Seed labels for every origin in this request (e.g. the list's category and section). */
+  labels?: string[];
 }
 
 /**
@@ -234,6 +242,8 @@ export interface SiteUpsertRequest {
   title?: string;
   description?: string;
   api_hosts: string[];
+  /** Replaces the site's labels when present. */
+  labels?: string[];
   /** ISO 8601 timestamp. */
   last_crawled_at?: string;
 }
@@ -260,6 +270,18 @@ export interface ListQueryParams {
   offset?: number;
 }
 
+/** Query string for `GET /mcps`. */
+export interface McpListQueryParams extends ListQueryParams {
+  /** Comma-separated labels; a row matches when it has any of them. */
+  label?: string;
+}
+
+/** One entry of `GET /labels`: a label and how many MCP servers carry it. */
+export interface LabelCount {
+  label: string;
+  count: number;
+}
+
 /** Query string for `GET /crawl-jobs`. `q` matches the origin. */
 export interface CrawlJobListQueryParams extends ListQueryParams {
   status?: CrawlJobStatus;
@@ -269,6 +291,8 @@ export interface CrawlJobListQueryParams extends ListQueryParams {
 export interface SiteListQueryParams extends ListQueryParams {
   /** Only sites that call this API host. */
   apiHost?: string;
+  /** Comma-separated labels; a site matches when it has any of them. */
+  label?: string;
 }
 
 // =============================================================================
