@@ -23,6 +23,7 @@ export * from './entities.js';
 export * from './apidoc.js';
 export * from './constants.js';
 export * from './paths.js';
+export * from './credential.js';
 
 // =============================================================================
 // Response helpers

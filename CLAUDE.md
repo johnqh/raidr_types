@@ -26,10 +26,12 @@ src/apidoc.ts              ApiDoc, ApiEndpoint, ApiParam, EndpointLink, ApiFlow,
 src/entities.ts            DB rows on the wire, request bodies, query params
 src/constants.ts           header names, proxy path, TOOL_NAME_RE
 src/paths.ts               extractPathParams, fillPathTemplate, mcpProxyUrl, resolveUpstreamUrl
+src/credential.ts          extractCredential, cookieValue, matchesPathTemplate, raidr.app ⇄ extension bridge
 src/schemas/index.ts       zod schemas, exported as ./schemas (zod is an optional peer)
 src/index.test.ts          response helpers and path functions
 src/schemas/index.test.ts  schema accept/reject cases
 src/apidoc.test.ts         endpointRef / parseEndpointRef and the api doc schemas
+src/credential.test.ts     extractCredential, matchesPathTemplate, the bridge guards
 ```
 
 ## The two exports
@@ -84,7 +86,31 @@ Values: `successResponse`, `errorResponse`, `paginatedResponse`,
 `MCP_PROXY_PATH` (`/mcp`), `TOOL_NAME_RE`, `MCP_SCHEMA_VERSION` (`1`),
 `RAIDR_ENTITY_KEY_PREFIX` (`raidr`: entity API keys look like `raidr_<hex>`),
 `RAIDR_SETTINGS_FILE` (`~/.raidr/config.json`, where skills keep the key).
-Type `RaidrSettings` = `{ apiKey?, apiUrl? }`, the shape of that file.
+Type `RaidrSettings` = `{ apiKey?, apiUrl?, siteTokens? }`, the shape of that
+file; `siteTokens` maps an API host to `{ token, savedAt }` and is written by
+raidr_cli's `raidr token <apiHost>`.
+
+Site credentials (`src/credential.ts`): `extractCredential(headers, auth)`
+returns the token a request carries, in the form raidr sends back as
+`X-Raidr-Token`: a `bearer` Authorization value minus its prefix (default
+`Bearer `), a `header` value minus `tokenPrefix`, or one `cookie`'s value
+(`cookieName`, default `session`). Header names match case-insensitively and
+an array value is joined. It returns null for empty values, `null`,
+`undefined`, `anonymous`, `guest` and redaction placeholders (`<KIND:…>`).
+`cookieValue(cookieHeader, name)` reads one cookie; `matchesPathTemplate`
+matches a path (query ignored, trailing `/` ignored) against a template where
+`{param}` is one non-empty segment. `CredentialAuth` is the subset of
+`ApiUserAuth`/`McpAuth` it needs; `CapturedCredential` is `{ token, verified }`
+(`verified`: a request carrying it to a signed-in-only path answered 2xx).
+
+raidr.app ⇄ extension bridge (same file): window messages tagged
+`source: RAIDR_BRIDGE_APP` (`raidr-app`) or `RAIDR_BRIDGE_EXTENSION`
+(`raidr-extension`). `BridgeRequest` is `ping`, `token/request` (carrying a
+`TokenRequest { apiHost, loginUrl, auth, userPaths }`) or `token/cancel`;
+`BridgeResponse` is `pong` (with the extension `version`), `token/opened`,
+`token/result` (a `CapturedCredential`) or `token/failed` (`reason`
+`closed|blocked|error`, optional `message`). Every message has an `id` the
+reply echoes. Guards: `isBridgeRequest`, `isBridgeResponse`.
 
 Crawl queue: `CrawlJob` (row of `crawl_jobs`), `CrawlJobStatus`
 (`queued|running|done|failed`), `CrawlJobResult` (incl. `crawled_at` and the
@@ -190,6 +216,7 @@ requests on `apiHost`:
 | `raidr_api` | root + `./schemas` (validates every write) |
 | `raidr_crawler` | root + `./schemas` (`publish --dry-run`) |
 | `raidr_client`, `raidr_lib`, `raidr_app` | root only; never zod |
+| `raidr_extension`, `raidr_cli` | root only (`extractCredential`, the bridge protocol, `RaidrSettings`) |
 
 ## Rules
 
@@ -222,7 +249,7 @@ readers tolerate the old shape.
 
 ## Commands
 
-All run with Bun on this repo; all pass (29 tests in 3 files).
+All run with Bun on this repo; all pass (35 tests in 4 files).
 
 | Command | Does |
 | --- | --- |
@@ -248,5 +275,8 @@ All run with Bun on this repo; all pass (29 tests in 3 files).
 - `ApiEndpoint.id` is `METHOD path` relative to the doc; an `endpointRef` is
   `METHOD https://host/path` and is what raidr_app puts in `?endpoint=`. Do
   not mix the two.
+- `extractCredential` is shared by raidr_extension and raidr_cli's
+  `raidr token` so both read the same token off the site's traffic. A change
+  to what it accepts changes both, and what raidr_api forwards upstream.
 - `ApiDoc.links` holds only links that end on this host. raidr_api stores
   them in a separate table so a flow can be read from either end.

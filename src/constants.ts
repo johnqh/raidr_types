@@ -44,6 +44,11 @@ export interface RaidrSettings {
   apiKey?: string;
   /** raidr_api base URL override; defaults to https://api.raidr.app. */
   apiUrl?: string;
+  /**
+   * Site tokens by API host, written by `raidr token <apiHost>` (raidr_cli) after
+   * the user signs in to the site in a local browser.
+   */
+  siteTokens?: Record<string, { token: string; savedAt: string }>;
 }
 
 /** A running crawl job whose lease expires is retried until this many attempts. */

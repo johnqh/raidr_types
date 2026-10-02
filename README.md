@@ -33,6 +33,16 @@ endpoints (an auth token or an id that one response supplies to a later
 request), which `ApiFlow` serves as a flow map. `ApiExecuteRequest` /
 `ApiExecuteResult` are the body and reply of `raidr_api`'s execute proxy.
 
+## Site credentials
+
+`extractCredential(headers, auth)` pulls a signed-in user's token off a
+request the site itself sent: the bearer token without its prefix, a named
+header without its `tokenPrefix`, or one cookie's value. It never returns
+placeholders or anonymous values. The same module defines the message protocol
+between raidr.app and the raidr extension (`BridgeRequest` / `BridgeResponse`,
+`TokenRequest`, `CapturedCredential`), and `RaidrSettings.siteTokens` holds
+tokens saved by `raidr token`.
+
 ## Related projects
 
 - `raidr_api` — CRUD for manifests, skills, sites and API docs plus the hosted MCP server
