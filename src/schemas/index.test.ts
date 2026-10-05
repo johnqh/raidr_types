@@ -4,11 +4,14 @@ import {
   crawlJobClaimSchema,
   crawlJobCompleteSchema,
   crawlJobEnqueueSchema,
+  crawlJobUpdateSchema,
   listQuerySchema,
   mcpManifestSchema,
   mcpToolSchema,
   originSchema,
   siteCreateSchema,
+  siteRouteSchema,
+  siteUpsertSchema,
 } from './index.js';
 
 const tool = {
@@ -191,10 +194,24 @@ describe('crawl job schemas', () => {
       false
     );
   });
+  test('enqueue takes a mode: full, api or routes', () => {
+    for (const mode of ['full', 'api', 'routes']) {
+      expect(
+        crawlJobEnqueueSchema.safeParse({ origins: ['https://suno.com'], mode })
+          .success
+      ).toBe(true);
+    }
+    expect(
+      crawlJobEnqueueSchema.safeParse({
+        origins: ['https://suno.com'],
+        mode: 'skills',
+      }).success
+    ).toBe(false);
+  });
   test('complete carries a result with the crawl time', () => {
     const ok = crawlJobCompleteSchema.safeParse({
       worker: 'w1',
-      status: 'done',
+      status: 'completed',
       result: {
         crawled_at: '2026-10-01T19:47:00.000Z',
         rendering: 'hybrid',
@@ -208,14 +225,96 @@ describe('crawl job schemas', () => {
     });
     expect(ok.success).toBe(true);
     expect(
-      crawlJobCompleteSchema.safeParse({ worker: 'w1', status: 'running' })
+      crawlJobCompleteSchema.safeParse({ worker: 'w1', status: 'crawling' })
         .success
     ).toBe(false);
+  });
+  test('an update changes mode or priority, and needs one of them', () => {
+    expect(crawlJobUpdateSchema.safeParse({ mode: 'routes' }).success).toBe(
+      true
+    );
+    expect(crawlJobUpdateSchema.safeParse({ priority: 5 }).success).toBe(true);
+    expect(crawlJobUpdateSchema.safeParse({}).success).toBe(false);
+    expect(
+      crawlJobUpdateSchema.safeParse({ headed_chrome: true }).success
+    ).toBe(true);
+    expect(
+      crawlJobEnqueueSchema.safeParse({
+        origins: ['https://suno.com'],
+        headed_chrome: true,
+      }).success
+    ).toBe(true);
   });
   test('claim leases are bounded', () => {
     expect(
       crawlJobClaimSchema.safeParse({ worker: 'w', lease_seconds: 5 }).success
     ).toBe(false);
     expect(crawlJobClaimSchema.safeParse({ worker: 'w' }).success).toBe(true);
+  });
+});
+
+describe('site route schemas', () => {
+  const route = {
+    url: 'https://suno.com/song/{id}',
+    params: [{ name: 'id', description: "the song's id" }],
+    query: [],
+    description: 'Plays one song.',
+    urlFields: [],
+    sources: ['code'],
+  };
+  test('accepts a route whose params name its placeholders', () => {
+    expect(siteRouteSchema.safeParse(route).success).toBe(true);
+    expect(
+      siteRouteSchema.safeParse({
+        ...route,
+        url: 'https://suno.com/me',
+        params: [],
+      }).success
+    ).toBe(true);
+  });
+  test('params must match the placeholders, in order', () => {
+    expect(siteRouteSchema.safeParse({ ...route, params: [] }).success).toBe(
+      false
+    );
+    expect(
+      siteRouteSchema.safeParse({
+        ...route,
+        url: 'https://suno.com/a/{x}/b/{y}',
+        params: [
+          { name: 'y', description: null },
+          { name: 'x', description: null },
+        ],
+      }).success
+    ).toBe(false);
+  });
+  test('rejects relative URLs, queries and bad placeholders', () => {
+    for (const url of [
+      '/song/{id}',
+      'ftp://suno.com/{id}',
+      'https://suno.com/song/{id}?wid=1',
+      'https://suno.com/song/{bad-name}',
+    ]) {
+      expect(siteRouteSchema.safeParse({ ...route, url }).success, url).toBe(
+        false
+      );
+    }
+  });
+  test('needs at least one distinct source', () => {
+    expect(siteRouteSchema.safeParse({ ...route, sources: [] }).success).toBe(
+      false
+    );
+    expect(
+      siteRouteSchema.safeParse({ ...route, sources: ['code', 'code'] }).success
+    ).toBe(false);
+  });
+  test('site upserts take optional routes with unique urls', () => {
+    expect(
+      siteUpsertSchema.safeParse({ api_hosts: [], routes: [route] }).success
+    ).toBe(true);
+    expect(siteUpsertSchema.safeParse({ api_hosts: [] }).success).toBe(true);
+    expect(
+      siteUpsertSchema.safeParse({ api_hosts: [], routes: [route, route] })
+        .success
+    ).toBe(false);
   });
 });

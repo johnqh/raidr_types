@@ -76,6 +76,13 @@ export interface McpToolRequest {
   bodyFields?: string[];
   /** Input field name → request header name. */
   headers?: Record<string, string>;
+  /**
+   * Input field whose value is sent as the whole body, whatever its JSON
+   * shape (an array, a string). Replaces `bodyFields` when set.
+   */
+  bodyArg?: string;
+  /** Headers with fixed values sent on every call of this tool (after the manifest's). */
+  staticHeaders?: Record<string, string>;
 }
 
 /** Optional description of what the upstream returns; informational only. */

@@ -62,6 +62,9 @@ export const LABEL_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 /** Most labels one site or MCP server carries. */
 export const MAX_LABELS = 12;
 
+/** Most routes one site stores. */
+export const MAX_SITE_ROUTES = 500;
+
 /**
  * Text as a label: `"Banks - United States"` → `banks-united-states`. Returns
  * null when nothing usable is left.

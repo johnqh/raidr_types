@@ -68,12 +68,13 @@ src/credential.test.ts     extractCredential, matchesPathTemplate, the bridge gu
 | Rows | `McpSummary` | `Mcp` without `manifest`, plus `tool_count` (list rows) |
 | Rows | `Skill` | `skills` row: SKILL.md markdown per API host |
 | Rows | `SkillSummary` | `Skill` without `markdown` (list rows) |
-| Rows | `Site` | `sites` row: origin and the `api_hosts` it calls |
+| Rows | `Site` | `sites` row: origin and the `api_hosts` it calls (never its routes) |
+| Rows | `SiteRoute` | a page URL the site's UI handles: `url` template (`https://suno.com/song/{id}`, fill with `fillPathTemplate`), `params` (one per `{name}`, in order, with `description`), `query` names, `description`, `urlFields` (`{ apiHost, endpoint, field }` responses that carry the full URL), `sources` (`router`/`code`/`response`/`visited`/`link`, strongest first) |
 | Rows | `ApiDocRow` | `api_docs` row: `doc` plus copied title/description/version/source and `endpoint_count` |
 | Rows | `ApiDocSummary` | `ApiDocRow` without `doc` (list and public summary) |
 | Bodies | `McpUpsertRequest` | `{ manifest }` for POST `/mcps` and PUT `/mcps/:apiHost` |
 | Bodies | `SkillUpsertRequest` / `SkillCreateRequest` | PUT `/skills/:apiHost` / POST `/skills` (adds `api_host`) |
-| Bodies | `SiteUpsertRequest` / `SiteCreateRequest` | PUT `/sites/:origin` / POST `/sites` (adds `origin`) |
+| Bodies | `SiteUpsertRequest` / `SiteCreateRequest` | PUT `/sites/:origin` / POST `/sites` (adds `origin`); optional `routes` (≤ `MAX_SITE_ROUTES` = 500) replaces the stored ones |
 | Bodies | `ApiDocUpsertRequest` | `{ doc }` for PUT `/apis/:apiHost` |
 | Bodies | `ApiExecuteRequest` / `ApiExecuteResult` | POST `/apis/:apiHost/execute`: endpoint id, params, credentials (never stored) / upstream status, headers, body |
 | Query | `ListQueryParams` | `q`, `limit` (default 50, max 200), `offset` |
@@ -117,7 +118,9 @@ Crawl queue: `CrawlJob` (row of `crawl_jobs`), `CrawlJobStatus`
 published `api_hosts`), `CrawlJobEnqueueRequest`/`Result`
 (`queued|already-queued|already-crawled`), `CrawlJobClaimRequest`,
 `CrawlJobHeartbeatRequest`, `CrawlJobCompleteRequest`,
-`CrawlJobListQueryParams`; constants `CRAWL_JOB_MAX_ATTEMPTS` (3),
+`CrawlJobUpdateRequest` (`PUT /crawl-jobs/:id`: mode or priority),
+`CrawlJobListQueryParams`, `CrawlJobMode` (`full|api|routes`, on every job),
+`CrawlJob.headed_chrome` (crawl in headed Chrome; enqueue/update take it too); constants `CRAWL_JOB_MAX_ATTEMPTS` (3),
 `CRAWL_JOB_LEASE_SECONDS` (1800); zod `crawlJob*Schema` in `./schemas`.
 
 API docs (`src/apidoc.ts`): `ApiDoc` (one per API host: `baseUrl`,
@@ -137,7 +140,9 @@ Schemas (`./schemas`): `apiHostSchema`, `originSchema`,
 `jsonSchemaObjectSchema`, `mcpAuthSchema`, `httpMethodSchema`,
 `mcpToolRequestSchema`, `mcpToolSchema`, `mcpSourceSchema`,
 `mcpManifestSchema`, `mcpUpsertSchema`, `skillUpsertSchema`,
-`skillCreateSchema`, `siteUpsertSchema`, `siteCreateSchema`,
+`skillCreateSchema`, `siteRouteSchema` (absolute http(s) URL, no query or
+hash, `params` = the URL's placeholders in order, ≥1 distinct source),
+`siteRoutesSchema` (unique URLs), `siteUpsertSchema`, `siteCreateSchema`,
 `listQuerySchema`, `siteListQuerySchema`, `apiParamSchema`,
 `apiEndpointSchema`, `endpointLinkSchema`, `apiDocSchema`,
 `apiDocUpsertSchema`, `apiExecuteSchema`.

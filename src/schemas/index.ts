@@ -10,6 +10,15 @@ import { z } from 'zod';
 import type {
   EndpointLink,
   ApiDoc,
+  ApiDocV1,
+  ApiDocV2,
+  ApiEndpointV2,
+  ApiExecuteInput,
+  ApiJsonSchema,
+  EndpointInputSchema,
+  EndpointResponse,
+  HeaderRecipe,
+  HeaderSource,
   ApiDocUpsertRequest,
   ApiEndpoint,
   ApiExecuteRequest,
@@ -19,6 +28,7 @@ import type {
   CrawlJobEnqueueRequest,
   CrawlJobHeartbeatRequest,
   CrawlJobResult,
+  CrawlJobUpdateRequest,
   JsonSchemaObject,
   McpAuth,
   McpManifest,
@@ -27,6 +37,9 @@ import type {
   McpToolRequest,
   McpUpsertRequest,
   SiteCreateRequest,
+  SiteRoute,
+  SiteRouteParam,
+  SiteRouteUrlField,
   SiteUpsertRequest,
   SkillCreateRequest,
   SkillUpsertRequest,
@@ -34,6 +47,7 @@ import type {
 import {
   LABEL_RE,
   MAX_LABELS,
+  MAX_SITE_ROUTES,
   TOOL_NAME_RE,
   extractPathParams,
 } from '../index.js';
@@ -140,6 +154,8 @@ export const mcpToolRequestSchema = z
     body: z.enum(['json', 'form']).nullable().optional(),
     bodyFields: z.array(z.string()).optional(),
     headers: z.record(z.string(), z.string()).optional(),
+    bodyArg: z.string().min(1).optional(),
+    staticHeaders: z.record(z.string(), z.string().max(4096)).optional(),
   })
   .refine((request) => request.method !== 'GET' || !request.body, {
     message: 'GET requests cannot carry a body',
@@ -200,6 +216,7 @@ export const mcpToolSchema = z
     check(Object.keys(tool.request.query ?? {}), 'query');
     check(Object.keys(tool.request.headers ?? {}), 'headers');
     check(tool.request.bodyFields ?? [], 'bodyFields');
+    check(tool.request.bodyArg ? [tool.request.bodyArg] : [], 'bodyArg');
   }) satisfies z.ZodType<McpTool>;
 
 /** `McpSource`. */
@@ -295,6 +312,97 @@ export const skillCreateSchema = skillUpsertSchema.extend({
   api_host: apiHostSchema,
 }) satisfies z.ZodType<SkillCreateRequest>;
 
+const PARAM_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * A site route. `url` is an absolute http(s) URL template with no query or
+ * hash, and `params` names its `{name}` placeholders exactly, in order.
+ */
+export const siteRouteSchema = z
+  .object({
+    url: z.string().min(1).max(500),
+    params: z
+      .array(
+        z.object({
+          name: z.string().regex(PARAM_NAME_RE),
+          description: z.string().max(300).nullable(),
+        }) satisfies z.ZodType<SiteRouteParam>
+      )
+      .max(10),
+    query: z.array(z.string().min(1).max(60)).max(20),
+    description: z.string().max(300).nullable(),
+    urlFields: z
+      .array(
+        z.object({
+          apiHost: apiHostSchema,
+          endpoint: z.string().min(1).max(300),
+          field: z.string().min(1).max(200),
+        }) satisfies z.ZodType<SiteRouteUrlField>
+      )
+      .max(10),
+    sources: z
+      .array(z.enum(['router', 'code', 'response', 'visited', 'link']))
+      .min(1)
+      .refine((s) => new Set(s).size === s.length, {
+        message: 'sources must be unique',
+      }),
+  })
+  .superRefine((route, ctx) => {
+    let url: URL;
+    try {
+      // Placeholders are not valid in every URL position; check the shape with them filled.
+      url = new URL(route.url.replace(/\{[^}]*\}/g, 'x'));
+    } catch {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['url'],
+        message: 'must be an absolute URL template',
+      });
+      return;
+    }
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['url'],
+        message: 'must be http or https',
+      });
+    }
+    if (url.search || url.hash || /[?#]/.test(route.url)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['url'],
+        message: 'must not have a query or hash; list query names in `query`',
+      });
+    }
+    if (/\{(?![A-Za-z_][A-Za-z0-9_]*\})/.test(route.url)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['url'],
+        message: 'placeholders must be {identifier}',
+      });
+    }
+    const placeholders = extractPathParams(route.url);
+    const names = route.params.map((p) => p.name);
+    if (placeholders.join(',') !== names.join(',')) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['params'],
+        message: `params must name the URL's placeholders in order (${placeholders.join(', ') || 'none'})`,
+      });
+    }
+  }) satisfies z.ZodType<SiteRoute>;
+
+/** Up to `MAX_SITE_ROUTES` routes with distinct URLs. */
+export const siteRoutesSchema = z
+  .array(siteRouteSchema)
+  .max(MAX_SITE_ROUTES)
+  .refine(
+    (routes) => new Set(routes.map((r) => r.url)).size === routes.length,
+    {
+      message: 'route urls must be unique',
+    }
+  );
+
 /** Body of `PUT /sites/:origin`. `last_crawled_at` is an ISO 8601 string. */
 export const siteUpsertSchema = z.object({
   title: z.string().optional(),
@@ -302,6 +410,7 @@ export const siteUpsertSchema = z.object({
   api_hosts: z.array(apiHostSchema),
   labels: labelsSchema.optional(),
   last_crawled_at: z.string().optional(),
+  routes: siteRoutesSchema.optional(),
 }) satisfies z.ZodType<SiteUpsertRequest>;
 
 /** Body of `POST /sites`: the upsert body plus `origin`. */
@@ -347,11 +456,13 @@ export const siteListQuerySchema = listQuerySchema.extend({
 // =============================================================================
 
 export const crawlJobStatusSchema = z.enum([
-  'queued',
-  'running',
-  'done',
+  'pending',
+  'crawling',
+  'completed',
   'failed',
 ]);
+
+export const crawlJobModeSchema = z.enum(['full', 'api', 'routes']);
 
 /** `CrawlJobResult`. */
 export const crawlJobResultSchema = z.object({
@@ -369,6 +480,8 @@ export const crawlJobResultSchema = z.object({
 export const crawlJobEnqueueSchema = z.object({
   origins: z.array(originSchema).min(1).max(500),
   force: z.boolean().optional(),
+  mode: crawlJobModeSchema.optional(),
+  headed_chrome: z.boolean().optional(),
   priority: z.number().int().min(-1000).max(1000).optional(),
   requested_by: z.string().max(200).optional(),
   labels: labelsSchema.optional(),
@@ -392,9 +505,24 @@ export const crawlJobHeartbeatSchema = z.object({
   lease_seconds: leaseSchema,
 }) satisfies z.ZodType<CrawlJobHeartbeatRequest>;
 
+/** Body of `PUT /crawl-jobs/:id`: at least one field. */
+export const crawlJobUpdateSchema = z
+  .object({
+    mode: crawlJobModeSchema.optional(),
+    priority: z.number().int().min(-1000).max(1000).optional(),
+    headed_chrome: z.boolean().optional(),
+  })
+  .refine(
+    (b) =>
+      b.mode !== undefined ||
+      b.priority !== undefined ||
+      b.headed_chrome !== undefined,
+    { message: 'Give mode, priority or headed_chrome' }
+  ) satisfies z.ZodType<CrawlJobUpdateRequest>;
+
 export const crawlJobCompleteSchema = z.object({
   worker: workerSchema,
-  status: z.enum(['done', 'failed']),
+  status: z.enum(['completed', 'failed']),
   result: crawlJobResultSchema.optional(),
   error: z.string().max(4000).optional(),
 }) satisfies z.ZodType<CrawlJobCompleteRequest>;
@@ -402,6 +530,7 @@ export const crawlJobCompleteSchema = z.object({
 /** `GET /crawl-jobs` query. */
 export const crawlJobListQuerySchema = listQuerySchema.extend({
   status: crawlJobStatusSchema.optional(),
+  mode: crawlJobModeSchema.optional(),
 });
 
 // =============================================================================
@@ -542,122 +671,399 @@ export const endpointLinkSchema = z.object({
   count: z.number().int().min(0).optional(),
 }) satisfies z.ZodType<EndpointLink>;
 
-/** `ApiDoc`: `baseUrl` host equals `apiHost`; endpoint ids are unique. */
-export const apiDocSchema = z
+// -----------------------------------------------------------------------------
+// Version 2: request and response schemas
+// -----------------------------------------------------------------------------
+
+/** Deepest nesting allowed in one schema. */
+export const MAX_SCHEMA_DEPTH = 16;
+/** Largest serialized input + responses of one endpoint, in characters. */
+export const MAX_ENDPOINT_SCHEMA_CHARS = 200_000;
+
+/** An HTTP header field name (RFC 9110 token). */
+const HEADER_NAME_RE = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+
+const jsonSchemaTypeSchema = z.enum([
+  'string',
+  'integer',
+  'number',
+  'boolean',
+  'object',
+  'array',
+  'null',
+]);
+
+/** `HeaderRecipe`. */
+export const headerRecipeSchema = z.object({
+  summary: z.string().min(1).max(500),
+  steps: z.array(z.string().min(1).max(2000)).min(1).max(30),
+  inputs: z.array(z.string().min(1).max(200)).max(30),
+  codeRef: z
+    .object({
+      script: z.string().min(1).max(500),
+      line: z.number().int().min(1).optional(),
+    })
+    .optional(),
+}) satisfies z.ZodType<HeaderRecipe>;
+
+/** `HeaderSource`: each kind carries the field it needs. */
+export const headerSourceSchema = z
   .object({
-    schemaVersion: z.literal(1),
-    apiHost: apiHostSchema,
-    baseUrl: z.string().url(),
-    siteOrigins: z.array(originSchema),
-    title: z.string().min(1),
-    description: z.string(),
-    auth: z.object({
-      user: z
-        .object({
-          style: z.enum(['bearer', 'header', 'cookie']),
-          headerName: z.string().optional(),
-          cookieName: z.string().optional(),
-          tokenPrefix: z.string().optional(),
-          loginUrl: z.string().url().optional(),
-          tokenHint: z.string().optional(),
-        })
-        .refine((u) => u.style !== 'header' || !!u.headerName, {
-          message: 'header style requires headerName',
-        })
-        .refine((u) => u.style !== 'cookie' || !!u.cookieName, {
-          message: 'cookie style requires cookieName',
-        })
-        .optional(),
-      apiKey: z
-        .object({
-          in: z.enum(['header', 'query']),
-          name: z.string().min(1),
-          hint: z.string().optional(),
-        })
-        .optional(),
-    }),
-    endpoints: z.array(apiEndpointSchema),
-    links: z.array(endpointLinkSchema).max(5000).optional(),
-    version: z.string().min(1),
-    generatedAt: z.string().min(1),
-    source: mcpSourceSchema,
+    kind: z.enum([
+      'constant',
+      'cookie',
+      'storage',
+      'response',
+      'auth',
+      'computed',
+      'unknown',
+    ]),
+    value: z.string().max(4096).optional(),
+    key: z.string().min(1).max(200).optional(),
+    from: z
+      .object({
+        endpointId: z.string().min(1),
+        field: z.string().min(1).max(500),
+      })
+      .optional(),
+    recipe: headerRecipeSchema.optional(),
   })
-  .superRefine((doc, ctx) => {
-    let host: string | null = null;
-    try {
-      const url = new URL(doc.baseUrl);
-      if (url.search || url.hash || url.username || url.password) {
+  .superRefine((h, ctx) => {
+    const need: Partial<Record<HeaderSource['kind'], keyof HeaderSource>> = {
+      constant: 'value',
+      cookie: 'key',
+      storage: 'key',
+      response: 'from',
+      computed: 'recipe',
+    };
+    const field = need[h.kind];
+    if (field && h[field] === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: [field],
+        message: `a ${h.kind} header needs "${field}"`,
+      });
+    }
+  }) satisfies z.ZodType<HeaderSource>;
+
+/** `ApiJsonSchema`, recursively; unknown keywords are kept. */
+export const apiJsonSchemaSchema: z.ZodType<ApiJsonSchema> = z.lazy(() =>
+  z
+    .object({
+      type: z
+        .union([jsonSchemaTypeSchema, z.array(jsonSchemaTypeSchema).min(1)])
+        .optional(),
+      description: z.string().max(4000).optional(),
+      properties: z.record(z.string(), apiJsonSchemaSchema).optional(),
+      required: z.array(z.string()).optional(),
+      items: apiJsonSchemaSchema.optional(),
+      additionalProperties: z
+        .union([z.boolean(), apiJsonSchemaSchema])
+        .optional(),
+      enum: z
+        .array(z.union([z.string(), z.number(), z.boolean(), z.null()]))
+        .optional(),
+      anyOf: z.array(apiJsonSchemaSchema).optional(),
+      default: z.unknown().optional(),
+      examples: z.array(z.unknown()).max(10).optional(),
+      format: z.string().optional(),
+      pattern: z.string().optional(),
+      minLength: z.number().int().min(0).optional(),
+      maxLength: z.number().int().min(0).optional(),
+      minimum: z.number().optional(),
+      maximum: z.number().optional(),
+      'x-raidr-header': headerSourceSchema.optional(),
+      'x-raidr-evidence': z.enum(['code', 'traffic', 'both']).optional(),
+    })
+    .loose()
+);
+
+/** Nesting depth of a schema: 1 for a leaf. */
+export function schemaDepth(schema: ApiJsonSchema): number {
+  const children: ApiJsonSchema[] = [
+    ...Object.values(schema.properties ?? {}),
+    ...(schema.items ? [schema.items] : []),
+    ...(typeof schema.additionalProperties === 'object'
+      ? [schema.additionalProperties]
+      : []),
+    ...(schema.anyOf ?? []),
+  ];
+  return 1 + Math.max(0, ...children.map(schemaDepth));
+}
+
+/** An object schema whose property names match `nameRe`. */
+const groupSchema = (nameRe: RegExp, what: string) =>
+  apiJsonSchemaSchema.superRefine((group, ctx) => {
+    for (const name of Object.keys(group.properties ?? {})) {
+      if (!nameRe.test(name)) {
         ctx.addIssue({
           code: 'custom',
-          path: ['baseUrl'],
-          message: 'baseUrl has no query, hash or credentials',
+          path: ['properties', name],
+          message: `"${name}" is not a valid ${what} name`,
         });
       }
-      host = url.host;
-    } catch {
-      host = null;
     }
-    if (host !== doc.apiHost) {
+  });
+
+/** `EndpointInputSchema`: groups by location; header properties say where their value comes from. */
+export const endpointInputSchemaSchema = z
+  .object({
+    type: z.literal('object'),
+    description: z.string().optional(),
+    properties: z
+      .object({
+        path: groupSchema(
+          /^[A-Za-z_][A-Za-z0-9_]*$/,
+          'path parameter'
+        ).optional(),
+        query: apiJsonSchemaSchema.optional(),
+        headers: groupSchema(HEADER_NAME_RE, 'header').optional(),
+        body: apiJsonSchemaSchema.optional(),
+      })
+      .strict(),
+    required: z.array(z.enum(['path', 'query', 'headers', 'body'])).optional(),
+  })
+  .loose()
+  .superRefine((input, ctx) => {
+    for (const [name, header] of Object.entries(
+      input.properties.headers?.properties ?? {}
+    )) {
+      if (!header['x-raidr-header']) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['properties', 'headers', 'properties', name],
+          message: `header "${name}" needs x-raidr-header`,
+        });
+      }
+    }
+  }) satisfies z.ZodType<EndpointInputSchema>;
+
+/** `EndpointResponse`. */
+export const endpointResponseSchema = z.object({
+  status: z.number().int().min(100).max(599),
+  description: z.string().min(1).max(4000),
+  contentType: z.string().optional(),
+  schema: apiJsonSchemaSchema.optional(),
+  example: z.string().max(8192).optional(),
+}) satisfies z.ZodType<EndpointResponse>;
+
+/** `ApiEndpointV2`: every `{param}` is a required path property; no GET body; bounded size. */
+export const apiEndpointV2Schema = z
+  .object({
+    id: z.string().min(1),
+    method: httpMethodSchema,
+    path: apiPathSchema,
+    summary: z.string().min(1),
+    description: z.string().optional(),
+    auth: z.enum(['none', 'user', 'api_key']),
+    tag: z.string().optional(),
+    role: z.literal('login').optional(),
+    bodyEncoding: z
+      .enum(['json', 'form', 'multipart', 'text'])
+      .nullable()
+      .optional(),
+    input: endpointInputSchemaSchema,
+    responses: z.array(endpointResponseSchema),
+  })
+  .superRefine((endpoint, ctx) => {
+    if (endpoint.id !== `${endpoint.method} ${endpoint.path}`) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['id'],
+        message: 'id must be "METHOD path"',
+      });
+    }
+    const body = endpoint.input.properties.body;
+    if (endpoint.method === 'GET' && (endpoint.bodyEncoding || body)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['bodyEncoding'],
+        message: 'GET requests cannot carry a body',
+      });
+    }
+    if (body && !endpoint.bodyEncoding) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['bodyEncoding'],
+        message: 'an endpoint with a body needs bodyEncoding',
+      });
+    }
+    const path = endpoint.input.properties.path;
+    for (const param of extractPathParams(endpoint.path)) {
+      if (!path?.properties?.[param] || !path.required?.includes(param)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['input', 'properties', 'path'],
+          message: `path parameter "${param}" must be a required property`,
+        });
+      }
+    }
+    const schemas: ApiJsonSchema[] = [
+      endpoint.input,
+      ...endpoint.responses.flatMap((r) => (r.schema ? [r.schema] : [])),
+    ];
+    if (schemas.some((s) => schemaDepth(s) > MAX_SCHEMA_DEPTH)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['input'],
+        message: `schemas nest deeper than ${MAX_SCHEMA_DEPTH} levels`,
+      });
+    }
+    const size = JSON.stringify([endpoint.input, endpoint.responses]).length;
+    if (size > MAX_ENDPOINT_SCHEMA_CHARS) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['input'],
+        message: `schemas are ${size} characters; the limit is ${MAX_ENDPOINT_SCHEMA_CHARS}`,
+      });
+    }
+  }) satisfies z.ZodType<ApiEndpointV2>;
+
+// -----------------------------------------------------------------------------
+// Docs
+// -----------------------------------------------------------------------------
+
+const apiDocAuthSchema = z.object({
+  user: z
+    .object({
+      style: z.enum(['bearer', 'header', 'cookie']),
+      headerName: z.string().optional(),
+      cookieName: z.string().optional(),
+      tokenPrefix: z.string().optional(),
+      loginUrl: z.string().url().optional(),
+      tokenHint: z.string().optional(),
+    })
+    .refine((u) => u.style !== 'header' || !!u.headerName, {
+      message: 'header style requires headerName',
+    })
+    .refine((u) => u.style !== 'cookie' || !!u.cookieName, {
+      message: 'cookie style requires cookieName',
+    })
+    .optional(),
+  apiKey: z
+    .object({
+      in: z.enum(['header', 'query']),
+      name: z.string().min(1),
+      hint: z.string().optional(),
+    })
+    .optional(),
+});
+
+/** Doc-level fields both versions share. */
+const apiDocBaseShape = {
+  apiHost: apiHostSchema,
+  baseUrl: z.string().url(),
+  siteOrigins: z.array(originSchema),
+  title: z.string().min(1),
+  description: z.string(),
+  auth: apiDocAuthSchema,
+  links: z.array(endpointLinkSchema).max(5000).optional(),
+  version: z.string().min(1),
+  generatedAt: z.string().min(1),
+  source: mcpSourceSchema,
+};
+
+/** Checks both versions share: baseUrl host, unique ids, links, auth coverage. */
+function checkApiDoc(doc: ApiDoc, ctx: z.RefinementCtx): void {
+  let host: string | null = null;
+  try {
+    const url = new URL(doc.baseUrl);
+    if (url.search || url.hash || url.username || url.password) {
       ctx.addIssue({
         code: 'custom',
         path: ['baseUrl'],
-        message: `baseUrl host must equal apiHost "${doc.apiHost}"`,
+        message: 'baseUrl has no query, hash or credentials',
       });
     }
-    const ids = new Set<string>();
-    doc.endpoints.forEach((e, i) => {
-      if (ids.has(e.id))
-        ctx.addIssue({
-          code: 'custom',
-          path: ['endpoints', i, 'id'],
-          message: `duplicate endpoint "${e.id}"`,
-        });
-      ids.add(e.id);
+    host = url.host;
+  } catch {
+    host = null;
+  }
+  if (host !== doc.apiHost) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['baseUrl'],
+      message: `baseUrl host must equal apiHost "${doc.apiHost}"`,
     });
-    // A doc carries the links into its own endpoints; `from` may be anywhere.
-    (doc.links ?? []).forEach((link, i) => {
-      if (link.to.apiHost !== doc.apiHost || !ids.has(link.to.endpointId)) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['links', i, 'to'],
-          message: "a link must end at one of this doc's endpoints",
-        });
-      }
-      if (link.from.apiHost === doc.apiHost && !ids.has(link.from.endpointId)) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['links', i, 'from'],
-          message: "a same-host link must start at one of this doc's endpoints",
-        });
-      }
-      if (
-        link.from.apiHost === link.to.apiHost &&
-        link.from.endpointId === link.to.endpointId
-      ) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['links', i],
-          message: 'an endpoint cannot feed itself',
-        });
-      }
-    });
-    const needsUser = doc.endpoints.some((e) => e.auth === 'user');
-    const needsKey = doc.endpoints.some((e) => e.auth === 'api_key');
-    if (needsUser && !doc.auth.user) {
+  }
+  const endpoints: { id: string; auth: string }[] = doc.endpoints;
+  const ids = new Set<string>();
+  endpoints.forEach((e, i) => {
+    if (ids.has(e.id))
       ctx.addIssue({
         code: 'custom',
-        path: ['auth', 'user'],
-        message: 'user endpoints need auth.user',
+        path: ['endpoints', i, 'id'],
+        message: `duplicate endpoint "${e.id}"`,
       });
-    }
-    if (needsKey && !doc.auth.apiKey) {
+    ids.add(e.id);
+  });
+  // A doc carries the links into its own endpoints; `from` may be anywhere.
+  (doc.links ?? []).forEach((link, i) => {
+    if (link.to.apiHost !== doc.apiHost || !ids.has(link.to.endpointId)) {
       ctx.addIssue({
         code: 'custom',
-        path: ['auth', 'apiKey'],
-        message: 'api_key endpoints need auth.apiKey',
+        path: ['links', i, 'to'],
+        message: "a link must end at one of this doc's endpoints",
       });
     }
-  }) satisfies z.ZodType<ApiDoc>;
+    if (link.from.apiHost === doc.apiHost && !ids.has(link.from.endpointId)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['links', i, 'from'],
+        message: "a same-host link must start at one of this doc's endpoints",
+      });
+    }
+    if (
+      link.from.apiHost === link.to.apiHost &&
+      link.from.endpointId === link.to.endpointId
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['links', i],
+        message: 'an endpoint cannot feed itself',
+      });
+    }
+  });
+  if (endpoints.some((e) => e.auth === 'user') && !doc.auth.user) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['auth', 'user'],
+      message: 'user endpoints need auth.user',
+    });
+  }
+  if (endpoints.some((e) => e.auth === 'api_key') && !doc.auth.apiKey) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['auth', 'apiKey'],
+      message: 'api_key endpoints need auth.apiKey',
+    });
+  }
+}
+
+/** `ApiDocV1`: `baseUrl` host equals `apiHost`; endpoint ids are unique. */
+export const apiDocV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    ...apiDocBaseShape,
+    endpoints: z.array(apiEndpointSchema),
+  })
+  .superRefine(checkApiDoc) satisfies z.ZodType<ApiDocV1>;
+
+/** `ApiDocV2`: the same doc-level rules, version-2 endpoints. */
+export const apiDocV2Schema = z
+  .object({
+    schemaVersion: z.literal(2),
+    ...apiDocBaseShape,
+    endpoints: z.array(apiEndpointV2Schema),
+    extractedBy: z.enum(['claude', 'codex', 'none']).optional(),
+  })
+  .superRefine(checkApiDoc) satisfies z.ZodType<ApiDocV2>;
+
+/** `ApiDoc`, either version. */
+export const apiDocSchema = z.union([
+  apiDocV1Schema,
+  apiDocV2Schema,
+]) satisfies z.ZodType<ApiDoc>;
 
 /** Body of `PUT /apis/:apiHost`. */
 export const apiDocUpsertSchema = z.object({
@@ -665,9 +1071,20 @@ export const apiDocUpsertSchema = z.object({
 }) satisfies z.ZodType<ApiDocUpsertRequest>;
 
 /** Body of `POST /apis/:apiHost/execute`. Credentials are bounded, never stored. */
+/** `ApiExecuteInput`: values for a version-2 endpoint, by location. */
+export const apiExecuteInputSchema = z.object({
+  path: z.record(z.string(), z.unknown()).optional(),
+  query: z.record(z.string(), z.unknown()).optional(),
+  headers: z
+    .record(z.string().regex(HEADER_NAME_RE), z.string().max(8192))
+    .optional(),
+  body: z.unknown().optional(),
+}) satisfies z.ZodType<ApiExecuteInput>;
+
 export const apiExecuteSchema = z.object({
   endpointId: z.string().min(1).max(500),
   params: z.record(z.string(), z.unknown()),
+  input: apiExecuteInputSchema.optional(),
   extraBody: z.record(z.string(), z.unknown()).optional(),
   userToken: z.string().max(16384).optional(),
   apiKey: z.string().max(4096).optional(),
