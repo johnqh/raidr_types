@@ -24,6 +24,7 @@ export * from './apidoc.js';
 export * from './constants.js';
 export * from './paths.js';
 export * from './credential.js';
+export * from './security.js';
 
 // =============================================================================
 // Response helpers

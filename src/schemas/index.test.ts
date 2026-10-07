@@ -5,10 +5,14 @@ import {
   crawlJobCompleteSchema,
   crawlJobEnqueueSchema,
   crawlJobUpdateSchema,
+  crawlListQuerySchema,
+  crawlRecordSchema,
   listQuerySchema,
   mcpManifestSchema,
   mcpToolSchema,
   originSchema,
+  securityIssueInputSchema,
+  securityIssueListQuerySchema,
   siteCreateSchema,
   siteRouteSchema,
   siteUpsertSchema,
@@ -316,5 +320,105 @@ describe('site route schemas', () => {
       siteUpsertSchema.safeParse({ api_hosts: [], routes: [route, route] })
         .success
     ).toBe(false);
+  });
+});
+
+describe('crawl record and security issue schemas', () => {
+  const issue = {
+    rule: 'secret-in-code',
+    category: 'secrets' as const,
+    severity: 'high' as const,
+    confidence: 'medium' as const,
+    title: 'Stripe secret key in JavaScript',
+    description: 'A live secret key ships to every visitor.',
+    recommendation: 'Revoke the key and keep it on the server.',
+    cwe: 'CWE-798',
+    owasp: 'A07:2021',
+    api_host: null,
+    evidence: [
+      {
+        kind: 'code' as const,
+        file: 'app.js',
+        line: 12,
+        snippet: 'sk_live_ab…yz',
+      },
+    ],
+    fingerprint: 'secret-in-code:stripe:ab12',
+  };
+
+  it('accepts a crawl with and without an audit', () => {
+    const base = {
+      origin: 'https://example.com',
+      crawled_at: '2026-10-06T01:43:34.211Z',
+    };
+    expect(crawlRecordSchema.safeParse(base).success).toBe(true);
+    expect(
+      crawlRecordSchema.safeParse({
+        ...base,
+        job_id: 'j1',
+        audit: { issues: [issue] },
+      }).success
+    ).toBe(true);
+    expect(
+      crawlRecordSchema.safeParse({
+        ...base,
+        audit: { issues: [], error: 'timed out' },
+      }).success
+    ).toBe(true);
+  });
+
+  it('rejects duplicate fingerprints, bad ids and a non-origin', () => {
+    const base = {
+      origin: 'https://example.com',
+      crawled_at: '2026-10-06T01:43:34.211Z',
+    };
+    expect(
+      crawlRecordSchema.safeParse({
+        ...base,
+        audit: { issues: [issue, issue] },
+      }).success
+    ).toBe(false);
+    expect(
+      securityIssueInputSchema.safeParse({ ...issue, cwe: '798' }).success
+    ).toBe(false);
+    expect(
+      securityIssueInputSchema.safeParse({ ...issue, owasp: 'A7' }).success
+    ).toBe(false);
+    expect(
+      securityIssueInputSchema.safeParse({ ...issue, rule: 'Secret In Code' })
+        .success
+    ).toBe(false);
+    expect(
+      crawlRecordSchema.safeParse({ ...base, origin: 'https://example.com/x' })
+        .success
+    ).toBe(false);
+  });
+
+  it('reads list queries', () => {
+    expect(crawlListQuerySchema.parse({ audited: 'true' })).toEqual({
+      audited: true,
+      limit: 50,
+      offset: 0,
+    });
+    expect(
+      securityIssueListQuerySchema.parse({
+        severity: 'high, critical',
+        category: 'secrets',
+      })
+    ).toMatchObject({ severity: ['high', 'critical'], category: ['secrets'] });
+    expect(
+      securityIssueListQuerySchema.safeParse({ severity: 'urgent' }).success
+    ).toBe(false);
+  });
+
+  it('takes audit on enqueue and update, and the audit mode', () => {
+    expect(
+      crawlJobEnqueueSchema.safeParse({
+        origins: ['https://a.com'],
+        audit: true,
+        mode: 'audit',
+      }).success
+    ).toBe(true);
+    expect(crawlJobUpdateSchema.safeParse({ audit: true }).success).toBe(true);
   });
 });

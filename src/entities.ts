@@ -234,11 +234,14 @@ export type CrawlJobStatus = 'pending' | 'crawling' | 'completed' | 'failed';
  * - `full`: API docs, MCP servers and skills, and the site's page routes.
  * - `api`: API docs, MCP servers and skills only (stored routes are kept).
  * - `routes`: the site's page routes only (stored hosts, docs and MCP servers are kept).
+ * - `audit`: the security audit only (`CrawlJob.audit` is implied). The
+ *   worker audits its saved bundle of the site when it has one, else crawls;
+ *   nothing else is published.
  *
- * Every mode crawls the site; `routes` skips the API writers, which do most
- * of the AI work.
+ * Every other mode crawls the site; `routes` skips the API writers, which do
+ * most of the AI work.
  */
-export type CrawlJobMode = 'full' | 'api' | 'routes';
+export type CrawlJobMode = 'full' | 'api' | 'routes' | 'audit';
 
 /** What a worker reports when a job finishes; stored on the job. */
 export interface CrawlJobResult {
@@ -273,6 +276,12 @@ export interface CrawlJob {
    * gets past bot checks that block headless browsers. Default false.
    */
   headed_chrome: boolean;
+  /**
+   * Run the security audit on this crawl and store its issues with the
+   * crawl record (`crawls`, `security_issues`). Default false; always true
+   * for mode `audit`.
+   */
+  audit: boolean;
   /** Higher runs first; ties run oldest first. */
   priority: number;
   attempts: number;
@@ -298,7 +307,9 @@ export interface CrawlJobEnqueueRequest {
   force?: boolean;
   /**
    * What the jobs produce. Default `full`. A job already queued for an origin
-   * with another mode becomes `full`, so it produces both.
+   * with another mode becomes `full`, so it produces both; `audit` meeting a
+   * queued job keeps that job's mode and turns its `audit` on, and a queued
+   * `audit` job takes the requested mode (with `audit` kept on).
    */
   mode?: CrawlJobMode;
   /**
@@ -306,6 +317,11 @@ export interface CrawlJobEnqueueRequest {
    * already queued for an origin is switched on by a request that sets it.
    */
   headed_chrome?: boolean;
+  /**
+   * Run the security audit (`CrawlJob.audit`). Default false. A job already
+   * queued for an origin is switched on by a request that sets it.
+   */
+  audit?: boolean;
   priority?: number;
   requested_by?: string;
   /** Seed labels for every origin in this request (e.g. the list's category and section). */
@@ -343,6 +359,7 @@ export interface CrawlJobUpdateRequest {
   mode?: CrawlJobMode;
   priority?: number;
   headed_chrome?: boolean;
+  audit?: boolean;
 }
 
 /** Body of `POST /crawl-jobs/:id/complete`. */

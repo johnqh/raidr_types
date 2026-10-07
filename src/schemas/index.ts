@@ -29,7 +29,11 @@ import type {
   CrawlJobHeartbeatRequest,
   CrawlJobResult,
   CrawlJobUpdateRequest,
+  CrawlAuditInput,
+  CrawlRecordRequest,
   JsonSchemaObject,
+  SecurityEvidence,
+  SecurityIssueInput,
   McpAuth,
   McpManifest,
   McpSource,
@@ -46,7 +50,9 @@ import type {
 } from '../index.js';
 import {
   LABEL_RE,
+  MAX_EVIDENCE_SNIPPET,
   MAX_LABELS,
+  MAX_SECURITY_ISSUES,
   MAX_SITE_ROUTES,
   TOOL_NAME_RE,
   extractPathParams,
@@ -462,7 +468,7 @@ export const crawlJobStatusSchema = z.enum([
   'failed',
 ]);
 
-export const crawlJobModeSchema = z.enum(['full', 'api', 'routes']);
+export const crawlJobModeSchema = z.enum(['full', 'api', 'routes', 'audit']);
 
 /** `CrawlJobResult`. */
 export const crawlJobResultSchema = z.object({
@@ -482,6 +488,7 @@ export const crawlJobEnqueueSchema = z.object({
   force: z.boolean().optional(),
   mode: crawlJobModeSchema.optional(),
   headed_chrome: z.boolean().optional(),
+  audit: z.boolean().optional(),
   priority: z.number().int().min(-1000).max(1000).optional(),
   requested_by: z.string().max(200).optional(),
   labels: labelsSchema.optional(),
@@ -511,13 +518,15 @@ export const crawlJobUpdateSchema = z
     mode: crawlJobModeSchema.optional(),
     priority: z.number().int().min(-1000).max(1000).optional(),
     headed_chrome: z.boolean().optional(),
+    audit: z.boolean().optional(),
   })
   .refine(
     (b) =>
       b.mode !== undefined ||
       b.priority !== undefined ||
-      b.headed_chrome !== undefined,
-    { message: 'Give mode, priority or headed_chrome' }
+      b.headed_chrome !== undefined ||
+      b.audit !== undefined,
+    { message: 'Give mode, priority, headed_chrome or audit' }
   ) satisfies z.ZodType<CrawlJobUpdateRequest>;
 
 export const crawlJobCompleteSchema = z.object({
@@ -531,6 +540,115 @@ export const crawlJobCompleteSchema = z.object({
 export const crawlJobListQuerySchema = listQuerySchema.extend({
   status: crawlJobStatusSchema.optional(),
   mode: crawlJobModeSchema.optional(),
+});
+
+// =============================================================================
+// Crawl records and security issues
+// =============================================================================
+
+export const securityCategorySchema = z.enum([
+  'secrets',
+  'client-code',
+  'headers-cookies',
+  'api-exposure',
+]);
+
+export const securitySeveritySchema = z.enum([
+  'critical',
+  'high',
+  'medium',
+  'low',
+  'info',
+]);
+
+export const securityConfidenceSchema = z.enum(['high', 'medium', 'low']);
+
+/** `SecurityEvidence`. */
+export const securityEvidenceSchema = z.object({
+  kind: z.enum(['code', 'traffic', 'header', 'cookie']),
+  file: z.string().max(1000).optional(),
+  line: z.number().int().min(0).optional(),
+  snippet: z.string().max(MAX_EVIDENCE_SNIPPET).optional(),
+  url: z.string().max(2000).optional(),
+  endpoint: z.string().max(1000).optional(),
+  header: z.string().max(200).optional(),
+  cookie: z.string().max(200).optional(),
+}) satisfies z.ZodType<SecurityEvidence>;
+
+/** `SecurityIssueInput`. */
+export const securityIssueInputSchema = z.object({
+  rule: z
+    .string()
+    .min(1)
+    .max(80)
+    .regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, 'must be a kebab-case rule id'),
+  category: securityCategorySchema,
+  severity: securitySeveritySchema,
+  confidence: securityConfidenceSchema,
+  title: z.string().min(1).max(200),
+  description: z.string().min(1).max(4000),
+  recommendation: z.string().min(1).max(2000),
+  cwe: z
+    .string()
+    .regex(/^CWE-\d{1,5}$/, 'must look like CWE-79')
+    .nullable(),
+  owasp: z
+    .string()
+    .regex(/^A\d{2}:20\d{2}$/, 'must look like A03:2021')
+    .nullable(),
+  api_host: apiHostSchema.nullable(),
+  evidence: z.array(securityEvidenceSchema).max(20),
+  fingerprint: z.string().min(1).max(128),
+}) satisfies z.ZodType<SecurityIssueInput>;
+
+/** `CrawlAuditInput`. */
+export const crawlAuditInputSchema = z.object({
+  issues: z.array(securityIssueInputSchema).max(MAX_SECURITY_ISSUES),
+  error: z.string().max(4000).optional(),
+}) satisfies z.ZodType<CrawlAuditInput>;
+
+/** Body of `POST /crawls`. Fingerprints must be unique within the audit. */
+export const crawlRecordSchema = z
+  .object({
+    origin: originSchema,
+    crawled_at: z.string().datetime({ offset: true }),
+    job_id: z.string().min(1).max(100).optional(),
+    audit: crawlAuditInputSchema.optional(),
+  })
+  .refine(
+    (b) =>
+      !b.audit ||
+      new Set(b.audit.issues.map((i) => i.fingerprint)).size ===
+        b.audit.issues.length,
+    { message: 'Issue fingerprints must be unique', path: ['audit', 'issues'] }
+  ) satisfies z.ZodType<CrawlRecordRequest>;
+
+/** A comma-separated query value (`high,critical`) as a trimmed list. */
+const commaList = z.string().transform((value) =>
+  value
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean)
+);
+
+/** `GET /crawls` query. `audited` is `true` or `false`. */
+export const crawlListQuerySchema = z.object({
+  origin: originSchema.optional(),
+  audited: z
+    .enum(['true', 'false'])
+    .transform((v) => v === 'true')
+    .optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
+/** `GET /security-issues` and `GET /crawls/:id/security-issues` query. */
+export const securityIssueListQuerySchema = z.object({
+  origin: originSchema.optional(),
+  severity: commaList.pipe(z.array(securitySeveritySchema).min(1)).optional(),
+  category: commaList.pipe(z.array(securityCategorySchema).min(1)).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
 });
 
 // =============================================================================

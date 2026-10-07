@@ -27,6 +27,7 @@ src/entities.ts            DB rows on the wire, request bodies, query params
 src/constants.ts           header names, proxy path, TOOL_NAME_RE
 src/paths.ts               extractPathParams, fillPathTemplate, mcpProxyUrl, resolveUpstreamUrl
 src/credential.ts          extractCredential, cookieValue, matchesPathTemplate, raidr.app ⇄ extension bridge
+src/security.ts            CrawlRecord, SecurityIssue*, CrawlRecordRequest, list query params
 src/schemas/index.ts       zod schemas, exported as ./schemas (zod is an optional peer)
 src/index.test.ts          response helpers and path functions
 src/schemas/index.test.ts  schema accept/reject cases
@@ -119,9 +120,27 @@ published `api_hosts`), `CrawlJobEnqueueRequest`/`Result`
 (`queued|already-queued|already-crawled`), `CrawlJobClaimRequest`,
 `CrawlJobHeartbeatRequest`, `CrawlJobCompleteRequest`,
 `CrawlJobUpdateRequest` (`PUT /crawl-jobs/:id`: mode or priority),
-`CrawlJobListQueryParams`, `CrawlJobMode` (`full|api|routes`, on every job),
-`CrawlJob.headed_chrome` (crawl in headed Chrome; enqueue/update take it too); constants `CRAWL_JOB_MAX_ATTEMPTS` (3),
+`CrawlJobListQueryParams`, `CrawlJobMode` (`full|api|routes|audit`, on every job),
+`CrawlJob.headed_chrome` (crawl in headed Chrome; enqueue/update take it too),
+`CrawlJob.audit` (run the security audit; enqueue/update take it too, mode
+`audit` implies it); constants `CRAWL_JOB_MAX_ATTEMPTS` (3),
 `CRAWL_JOB_LEASE_SECONDS` (1800); zod `crawlJob*Schema` in `./schemas`.
+
+Crawl records and security issues (`src/security.ts`): `CrawlRecord` (row of
+`crawls`: one finished crawl, unique on origin + `crawled_at`; `audited`,
+`audit_error`, `issue_counts` by severity), `SecurityIssueInput` (`rule`,
+`category` secrets/client-code/headers-cookies/api-exposure, `severity`
+critical…info, `confidence`, title, description, recommendation, `cwe`
+`CWE-n`, `owasp` `Ann:20nn`, `api_host`, masked `evidence[]`,
+`fingerprint` stable across crawls), `SecurityIssue` (row), `LatestSecurityIssue`
+(+ `crawled_at`, `latest_crawled_at`), `CrawlRecordRequest` (`POST /crawls`,
+optional `audit: { issues, error? }`), `CrawlListQueryParams`,
+`SecurityIssueListQueryParams` (comma-separated `severity`/`category`);
+constants `SECURITY_CATEGORIES`, `SECURITY_SEVERITIES`, `MAX_SECURITY_ISSUES`
+(500), `MAX_EVIDENCE_SNIPPET` (500). Zod: `crawlRecordSchema` (fingerprints
+unique), `securityIssueInputSchema`, `crawlListQuerySchema`,
+`securityIssueListQuerySchema`. raidr_processor's `AuditIssue` has the same
+fields; keep the two in step.
 
 API docs (`src/apidoc.ts`): `ApiDoc` (one per API host: `baseUrl`,
 `siteOrigins`, `auth`, `endpoints`, optional `links`), `ApiEndpoint` (`id` is
