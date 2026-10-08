@@ -303,6 +303,45 @@ describe('site route schemas', () => {
       );
     }
   });
+  test('param sources: kept as given, default [] for older routes', () => {
+    const source = {
+      apiHost: 'api.lu.ma',
+      endpoint: 'GET /discover/events',
+      field: 'entries[].event.url',
+    };
+    const withSources = siteRouteSchema.safeParse({
+      ...route,
+      params: [{ name: 'id', description: null, sources: [source] }],
+    });
+    expect(withSources.success).toBe(true);
+    expect(withSources.data?.params[0].sources).toEqual([source]);
+    const old = siteRouteSchema.safeParse(route);
+    expect(old.success).toBe(true);
+    expect(old.data?.params[0].sources).toEqual([]);
+  });
+  test('param sources are bounded and well-formed', () => {
+    const source = { apiHost: 'api.lu.ma', endpoint: 'GET /e', field: 'url' };
+    expect(
+      siteRouteSchema.safeParse({
+        ...route,
+        params: [
+          { name: 'id', description: null, sources: Array(6).fill(source) },
+        ],
+      }).success
+    ).toBe(false);
+    expect(
+      siteRouteSchema.safeParse({
+        ...route,
+        params: [
+          {
+            name: 'id',
+            description: null,
+            sources: [{ ...source, field: '' }],
+          },
+        ],
+      }).success
+    ).toBe(false);
+  });
   test('needs at least one distinct source', () => {
     expect(siteRouteSchema.safeParse({ ...route, sources: [] }).success).toBe(
       false

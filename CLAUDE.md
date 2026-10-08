@@ -28,6 +28,7 @@ src/constants.ts           header names, proxy path, TOOL_NAME_RE
 src/paths.ts               extractPathParams, fillPathTemplate, mcpProxyUrl, resolveUpstreamUrl
 src/credential.ts          extractCredential, cookieValue, matchesPathTemplate, raidr.app ⇄ extension bridge
 src/security.ts            CrawlRecord, SecurityIssue*, CrawlRecordRequest, list query params
+src/upstream.ts            portable buildUpstreamRequest / applyAuth / assertSafeUpstream (no URL/Headers/DNS)
 src/schemas/index.ts       zod schemas, exported as ./schemas (zod is an optional peer)
 src/index.test.ts          response helpers and path functions
 src/schemas/index.test.ts  schema accept/reject cases
@@ -70,7 +71,7 @@ src/credential.test.ts     extractCredential, matchesPathTemplate, the bridge gu
 | Rows | `Skill` | `skills` row: SKILL.md markdown per API host |
 | Rows | `SkillSummary` | `Skill` without `markdown` (list rows) |
 | Rows | `Site` | `sites` row: origin and the `api_hosts` it calls (never its routes) |
-| Rows | `SiteRoute` | a page URL the site's UI handles: `url` template (`https://suno.com/song/{id}`, fill with `fillPathTemplate`), `params` (one per `{name}`, in order, with `description`), `query` names, `description`, `urlFields` (`{ apiHost, endpoint, field }` responses that carry the full URL), `sources` (`router`/`code`/`response`/`visited`/`link`, strongest first) |
+| Rows | `SiteRoute` | a page URL the site's UI handles: `url` template (`https://suno.com/song/{id}`, fill with `fillPathTemplate`), `params` (one per `{name}`, in order, with `description` and `sources`: `{ apiHost, endpoint, field }` response fields whose values were seen filling the param in a page URL the crawl visited or saw linked, ≤ 5, most matches first; absent on routes published before 0.1.13, so read `param.sources ?? []`), `query` names, `description`, `urlFields` (`{ apiHost, endpoint, field }` responses that carry the full URL), `sources` (`router`/`code`/`response`/`visited`/`link`, strongest first) |
 | Rows | `ApiDocRow` | `api_docs` row: `doc` plus copied title/description/version/source and `endpoint_count` |
 | Rows | `ApiDocSummary` | `ApiDocRow` without `doc` (list and public summary) |
 | Bodies | `McpUpsertRequest` | `{ manifest }` for POST `/mcps` and PUT `/mcps/:apiHost` |
@@ -113,6 +114,24 @@ raidr.app ⇄ extension bridge (same file): window messages tagged
 `token/result` (a `CapturedCredential`) or `token/failed` (`reason`
 `closed|blocked|error`, optional `message`). Every message has an `id` the
 reply echoes. Guards: `isBridgeRequest`, `isBridgeResponse`.
+
+Direct site calls (`src/upstream.ts`, root export, RN-safe: no `URL`,
+`URLSearchParams`, `Headers`, `Request`, DNS or Node imports — RN's `URL` is
+incomplete): `buildUpstreamRequest(manifest, tool, args, token)` returns a
+plain `UpstreamRequest { url, method, headers, body? }` with exactly raidr_api's
+mapping rules (query and form bodies encoded byte-for-byte like
+`URLSearchParams`; header names compared case-insensitively, auth last);
+`applyAuth(headers: Record<string,string>, auth, token)` mutates a plain
+record; `assertSafeUpstream(url, manifest, { allowLocalhost? })` throws
+`UpstreamBlockedError` unless the URL is https, credential-free, on the host of
+`baseUrl` and equal to `apiHost`, and not a literal private/loopback/link-local
+IP, an ambiguous numeric host (`2130706433`, `0x7f.1`) or an internal name
+(`localhost`, `*.local`, ...); `allowLocalhost` (dev only) admits http and
+loopback for `localhost`/`127.0.0.1`/`[::1]`. Also `parseHttpUrl`,
+`isPrivateAddress`, `McpToolInputError`, `MAX_UPSTREAM_BYTES` (1 000 000).
+raidr_agent_lib's `DirectSiteConnector` uses these from the device; raidr_api
+still has its own copy in `src/mcp/upstream.ts` + `guard.ts` — keep the rules
+in step.
 
 Crawl queue: `CrawlJob` (row of `crawl_jobs`), `CrawlJobStatus`
 (`queued|running|done|failed`), `CrawlJobResult` (incl. `crawled_at` and the
@@ -160,7 +179,8 @@ Schemas (`./schemas`): `apiHostSchema`, `originSchema`,
 `mcpToolRequestSchema`, `mcpToolSchema`, `mcpSourceSchema`,
 `mcpManifestSchema`, `mcpUpsertSchema`, `skillUpsertSchema`,
 `skillCreateSchema`, `siteRouteSchema` (absolute http(s) URL, no query or
-hash, `params` = the URL's placeholders in order, ≥1 distinct source),
+hash, `params` = the URL's placeholders in order, each param's `sources`
+≤ 5 and defaulting to `[]`, ≥1 distinct source), `siteRouteUrlFieldSchema`,
 `siteRoutesSchema` (unique URLs), `siteUpsertSchema`, `siteCreateSchema`,
 `listQuerySchema`, `siteListQuerySchema`, `apiParamSchema`,
 `apiEndpointSchema`, `endpointLinkSchema`, `apiDocSchema`,
@@ -273,7 +293,7 @@ readers tolerate the old shape.
 
 ## Commands
 
-All run with Bun on this repo; all pass (35 tests in 4 files).
+All run with Bun on this repo; all pass (73 tests in 7 files).
 
 | Command | Does |
 | --- | --- |

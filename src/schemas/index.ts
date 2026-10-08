@@ -320,6 +320,13 @@ export const skillCreateSchema = skillUpsertSchema.extend({
 
 const PARAM_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
+/** An API response field: endpoint key plus a dotted path, `[]` for array items. */
+export const siteRouteUrlFieldSchema = z.object({
+  apiHost: apiHostSchema,
+  endpoint: z.string().min(1).max(300),
+  field: z.string().min(1).max(200),
+}) satisfies z.ZodType<SiteRouteUrlField>;
+
 /**
  * A site route. `url` is an absolute http(s) URL template with no query or
  * hash, and `params` names its `{name}` placeholders exactly, in order.
@@ -332,20 +339,14 @@ export const siteRouteSchema = z
         z.object({
           name: z.string().regex(PARAM_NAME_RE),
           description: z.string().max(300).nullable(),
+          // Optional on input: routes published before 0.1.13 have none.
+          sources: z.array(siteRouteUrlFieldSchema).max(5).default([]),
         }) satisfies z.ZodType<SiteRouteParam>
       )
       .max(10),
     query: z.array(z.string().min(1).max(60)).max(20),
     description: z.string().max(300).nullable(),
-    urlFields: z
-      .array(
-        z.object({
-          apiHost: apiHostSchema,
-          endpoint: z.string().min(1).max(300),
-          field: z.string().min(1).max(200),
-        }) satisfies z.ZodType<SiteRouteUrlField>
-      )
-      .max(10),
+    urlFields: z.array(siteRouteUrlFieldSchema).max(10),
     sources: z
       .array(z.enum(['router', 'code', 'response', 'visited', 'link']))
       .min(1)

@@ -82,9 +82,17 @@ export interface SiteRouteParam {
   name: string;
   /** What value goes there (`"the song's id"`); null when unknown. */
   description: string | null;
+  /**
+   * Response fields whose values were seen filling this param in a page URL
+   * the crawl visited or saw linked (`entries[].event.api_id`), most matches
+   * first, at most 5. Found by exact value match, never guessed; empty when
+   * none was seen. Routes published before 0.1.13 have no `sources`: readers
+   * use `param.sources ?? []`, and `siteRouteSchema` fills `[]`.
+   */
+  sources: SiteRouteUrlField[];
 }
 
-/** An API response field that holds a site route's full URL. */
+/** An API response field: a site route's full URL, or a value for one of its params. */
 export interface SiteRouteUrlField {
   apiHost: string;
   /** Endpoint key, `"GET /api/clip/{id}"`. */
