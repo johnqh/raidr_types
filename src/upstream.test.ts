@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CHROME_USER_AGENT,
   MAX_UPSTREAM_BYTES,
   McpToolInputError,
   UpstreamBlockedError,
@@ -87,6 +88,37 @@ const tool = (name: string): McpTool =>
   manifest.tools.find((t) => t.name === name)!;
 
 describe('buildUpstreamRequest', () => {
+  it('sends a Chrome User-Agent, which a manifest header can override', () => {
+    const req = buildUpstreamRequest(
+      manifest,
+      tool('get_user'),
+      { userId: 'u' },
+      undefined
+    );
+    expect(req.headers['User-Agent']).toBe(CHROME_USER_AGENT);
+    expect(CHROME_USER_AGENT).toMatch(/Chrome\/\d+/);
+    const own = buildUpstreamRequest(
+      { ...manifest, staticHeaders: { 'user-agent': 'SiteApp/1.0' } },
+      tool('get_user'),
+      { userId: 'u' },
+      undefined
+    );
+    const agents = Object.entries(own.headers).filter(
+      ([name]) => name.toLowerCase() === 'user-agent'
+    );
+    expect(agents).toEqual([[expect.any(String), 'SiteApp/1.0']]);
+  });
+
+  it("sends the site's own page as Referer", () => {
+    const req = buildUpstreamRequest(
+      { ...manifest, siteOrigins: ['https://www.meetup.com'] },
+      tool('get_user'),
+      { userId: 'u' },
+      undefined
+    );
+    expect(req.headers.Referer).toBe('https://www.meetup.com/');
+  });
+
   it('fills path params with encoding and forwards bearer tokens', () => {
     const req = buildUpstreamRequest(
       manifest,

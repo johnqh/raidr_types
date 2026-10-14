@@ -178,6 +178,15 @@ function encodePairs(pairs: Array<[string, string]>): string {
 }
 
 /**
+ * The User-Agent every MCP tool call sends: desktop Chrome on macOS. Sites
+ * answer the API calls their own web pages make, and some refuse anything
+ * that does not look like a browser (Vivid Seats returns 404 without it).
+ */
+export const CHROME_USER_AGENT =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36';
+
+/**
  * Map one tool call onto a plain request description, with no I/O.
  *
  * Same order and rules as raidr_api: path (placeholders filled with
@@ -252,7 +261,15 @@ export function buildUpstreamRequest(
   const url = `${base.protocol}://${base.host}${basePath}${path}${query ? `?${query}` : ''}`;
 
   const headers: Record<string, string> = {
+    // Some sites (Vivid Seats behind Akamai) refuse a request without a
+    // browser's User-Agent; a manifest or tool header still overrides it.
+    'User-Agent': CHROME_USER_AGENT,
     Accept: 'application/json, text/plain;q=0.9, */*;q=0.8',
+    // The site's own page, as its frontend sends: keys borrowed from a site
+    // (a Google Maps key on meetup.com) only answer requests from it.
+    ...(manifest.siteOrigins?.[0]
+      ? { Referer: `${manifest.siteOrigins[0].replace(/\/+$/, '')}/` }
+      : {}),
   };
   for (const [name, value] of Object.entries({
     ...manifest.staticHeaders,
