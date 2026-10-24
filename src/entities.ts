@@ -409,7 +409,7 @@ export interface SiteUpsertRequest {
   labels?: string[];
   /** ISO 8601 timestamp. */
   last_crawled_at?: string;
-  /** Replaces the site's routes when present (`GET /sites/:origin/routes`). At most `MAX_SITE_ROUTES`. */
+  /** Replaces the site's routes when present (`GET /sites/:origin/routes`). */
   routes?: SiteRoute[];
 }
 

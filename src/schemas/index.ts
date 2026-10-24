@@ -53,7 +53,6 @@ import {
   MAX_EVIDENCE_SNIPPET,
   MAX_LABELS,
   MAX_SECURITY_ISSUES,
-  MAX_SITE_ROUTES,
   TOOL_NAME_RE,
   extractPathParams,
 } from '../index.js';
@@ -399,10 +398,9 @@ export const siteRouteSchema = z
     }
   }) satisfies z.ZodType<SiteRoute>;
 
-/** Up to `MAX_SITE_ROUTES` routes with distinct URLs. */
+/** Routes with distinct URLs; no total route limit. */
 export const siteRoutesSchema = z
   .array(siteRouteSchema)
-  .max(MAX_SITE_ROUTES)
   .refine(
     (routes) => new Set(routes.map((r) => r.url)).size === routes.length,
     {
